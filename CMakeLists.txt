@@ -118,6 +118,7 @@ if(UNIX)
     src/net/ws_server.cpp
     src/gateway.cpp
     src/audio/apm_wrapper.cpp
+    src/audio/audio_pipeline.cpp
     src/session/redis_store.cpp
     src/telemetry/telemetry.cpp
     src/telemetry/otlp_exporter.cpp

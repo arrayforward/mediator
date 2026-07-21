@@ -28,7 +28,7 @@
 #include "telemetry/otlp_exporter.h"
 #include "telemetry/telemetry.h"
 
-namespace mediator::audio { class ApmWrapper; struct ApmCalib; }
+namespace mediator::audio { class ApmWrapper; struct ApmCalib; class AudioPipeline; }
 
 namespace mediator {
 
@@ -62,6 +62,8 @@ private:
     void ExecGrpcCall(const GrpcCall& call);
     void OnAudioToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
                       uint32_t flags);
+    void WriteToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
+                    uint32_t flags);
     void Inject(MsgType type, const SessionId& sid, ClipId clip,
                 std::string text = {}, std::vector<uint8_t> payload = {});
 
@@ -80,10 +82,10 @@ private:
     std::unordered_map<std::string, std::unique_ptr<net::GrpcBackend::AsrStream>>
         m_asrStreams;
 
-    // 每会话 WebRTC APM（AECM/NS/VAD）
-    std::mutex m_apmMtx;
-    std::unordered_map<std::string, std::unique_ptr<audio::ApmWrapper>> m_apmSessions;
-    audio::ApmWrapper* GetApmSession(const SessionId& sid);
+    // 音频异步管线：每会话一个 APM 实例（actor 模型，CPU 池调度）。
+    // APM 与连接上下文绑定，会话 3 分钟超时 GC 时一并清除（session_gc 信号）
+    std::unique_ptr<audio::AudioPipeline> m_pipeline;
+    void CleanupSessionResources(const SessionId& sid);
 
     std::unique_ptr<session::RedisStore> m_redis;
     std::unique_ptr<telemetry::OtlpMetricsExporter> m_otlp;

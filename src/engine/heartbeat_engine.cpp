@@ -297,6 +297,8 @@ void HeartbeatEngine::EvolveSessionGc(int64_t now, ChangeSet& cs) {
             cs.grpc_calls.push_back(
                 GrpcCall{"memory", "FetchContext", sid, clip::kNone, "ctx:" + s.m_uid});
             cs.redis_ops.push_back(RedisOp{"DEL", "ctx:" + s.m_uid, "", 0});
+            // 通知执行层清理会话附属资源（APM 实例/ASR 流，随上下文一并超时）
+            cs.board_writes.push_back(BoardMutation{sid, "session_gc", s.m_uid});
             dead.push_back(sid);
         }
     });

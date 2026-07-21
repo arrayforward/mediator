@@ -14,6 +14,7 @@
 #include "gateway.h"
 
 #include "audio/apm_wrapper.h"
+#include "audio/audio_pipeline.h"
 #include "audio/g711.h"
 #include "core/log.h"
 #include "net/grpc_clients.h"
@@ -72,11 +73,22 @@ Gateway::Gateway(GatewayConfig cfg)
 
     net::WsCallbacks cb;
     cb.inject = [this](Message&& m) {
+        // 水印标定结果注入音频管线（kWmDetected 同时进引擎标记标定完成）
+        if (m.type == MsgType::kWmDetected && m_pipeline) {
+            audio::ApmCalib calib{static_cast<int32_t>(m.aux), m.dval};
+            m_pipeline->SetCalib(m.session_id, calib);
+        }
         m_wasmBus.Notify(m); // wasm 观察者（只读，trap 自动熔断）
         m_engine.Inject(std::move(m));
     };
     cb.on_audio = [this](const SessionId& sid, const std::vector<int16_t>& pcm,
                          uint32_t flags) { OnAudioToAsr(sid, pcm, flags); };
+    // 音频管线：每会话 APM 实例 + CPU 池（1.5×核数，至少2线程）
+    if (m_cfg.enable_apm) {
+        const int workers = std::max(2, static_cast<int>(std::thread::hardware_concurrency() * 3 / 2));
+        m_pipeline = std::make_unique<audio::AudioPipeline>(workers);
+    }
+
     m_ws = std::make_unique<net::WsServer>(m_cfg.ws_port, m_cfg.cert_file,
                                            m_cfg.key_file, m_auth.get(), std::move(cb));
 }
@@ -117,6 +129,8 @@ void Gateway::Inject(MsgType type, const SessionId& sid, ClipId clip,
 }
 
 void Gateway::Dispatch(const ChangeSet& cs) {
+    for (const auto& b : cs.board_writes)
+        if (b.field == "session_gc") CleanupSessionResources(b.session_id);
     for (const auto& call : cs.grpc_calls)
         m_pool.Post([this, call] { ExecGrpcCall(call); });
     for (const auto& out : cs.ws_sends) {
@@ -191,10 +205,8 @@ void Gateway::ExecGrpcCall(const GrpcCall& call) {
         if (pcm.empty()) return;
         std::vector<int16_t> samples(pcm.size() / 2);
         std::memcpy(samples.data(), pcm.data(), samples.size() * 2);
-        // 下行 PCM 回灌 AEC 参考（先 reverse 后 capture 的 AEC 用法）
-        if (m_cfg.enable_apm) {
-            if (auto* apm = GetApmSession(call.session_id)) apm->ProcessRender(samples);
-        }
+        // 下行 PCM 投渲染任务（会话 FIFO 保证先 reverse 后 capture）
+        if (m_pipeline) m_pipeline->PostRender(call.session_id, samples);
         Inject(MsgType::kTtsAudioChunk, call.session_id, call.clip_id, {},
                audio::EncodeALaw(samples));
     } else if (call.service == "business") {
@@ -207,33 +219,29 @@ void Gateway::ExecGrpcCall(const GrpcCall& call) {
     }
 }
 
-audio::ApmWrapper* Gateway::GetApmSession(const SessionId& sid) {
-    if (!m_cfg.enable_apm) return nullptr;
-    std::lock_guard<std::mutex> lk(m_apmMtx);
-    auto& slot = m_apmSessions[net::SidHex(sid)];
-    if (!slot) {
-        audio::ApmCalib calib{};
-        // 从黑板读取水印标定结果（延迟/漂移）注入 APM
-        if (const auto* s = m_engine.Board().FindSession(sid)) {
-            calib.delay_samples = s->m_aecCalib.delay_samples;
-            calib.skew = s->m_aecCalib.skew;
-        }
-        slot = std::make_unique<audio::ApmWrapper>(calib);
-    }
-    return slot.get();
+void Gateway::CleanupSessionResources(const SessionId& sid) {
+    // 会话 3 分钟超时 GC：清除 APM 实例与 ASR 流（随上下文一并释放）
+    if (m_pipeline) m_pipeline->RemoveSession(sid);
+    std::lock_guard<std::mutex> lk(m_asrMtx);
+    m_asrStreams.erase(net::SidHex(sid));
 }
 
 void Gateway::OnAudioToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
                            uint32_t flags) {
-    // WebRTC APM：回声消除 + 降噪 + VAD（净语音送 ASR）
-    std::vector<int16_t> clean = pcm;
-    uint32_t f = flags;
-    if (auto* apm = GetApmSession(sid)) {
-        auto res = apm->ProcessCapture(pcm);
-        if (!res.pcm.empty()) clean = std::move(res.pcm);
-        if (res.has_voice) f |= msgflag::kVoice; // APM VAD 与端侧 flags 取并集
+    // APM 路径：异步投采集任务，净语音+VAD 回调中写 ASR（会话 FIFO 保序）
+    if (m_pipeline) {
+        m_pipeline->PostCapture(sid, pcm, [this, sid, flags](const audio::ApmResult& res) {
+            uint32_t f = flags;
+            if (res.has_voice) f |= msgflag::kVoice; // APM VAD 与端侧 flags 取并集
+            WriteToAsr(sid, res.pcm.empty() ? std::vector<int16_t>{} : res.pcm, f);
+        });
+        return;
     }
+    WriteToAsr(sid, pcm, flags);
+}
 
+void Gateway::WriteToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
+                         uint32_t flags) {
     net::GrpcBackend::AsrStream* stream = nullptr;
     {
         std::lock_guard<std::mutex> lk(m_asrMtx);
@@ -250,7 +258,7 @@ void Gateway::OnAudioToAsr(const SessionId& sid, const std::vector<int16_t>& pcm
         }
         stream = slot.get();
     }
-    stream->Write(clean, f);
+    if (!pcm.empty()) stream->Write(pcm, flags);
 }
 
 } // namespace mediator

@@ -1,13 +1,17 @@
 // ============================================================================
 // apm_wrapper.h — WebRTC AudioProcessing 封装（设计文档 §2/§6.1）
 //
-// 实现思路：
-//   每会话一个实例，16kHz 单声道 10ms 帧（160 采样）处理：
-//   - ProcessRender：下行 PCM 回灌 reverse stream（AEC 参考信号）。
-//     调用前按 §6.5 水印标定结果做 DelayLine 延迟补偿 + ResampleLinear
-//     漂移校正（skew）。
-//   - ProcessCapture：上行 PCM → AEC 回声消除 → NS 降噪 → 输出净语音，
-//     附 VAD 语音概率（stream_has_voice）。
+// 并发模型（优化：无锁 SPSC，替代互斥串行化）：
+//   webrtc::AudioProcessing 非线程安全，且 AEC 语义上要求"先 reverse 后
+//   capture"的顺序性——因此不做锁，而是**单线程所有权**：
+//   - 生产线程（TTS 下行）只调 PushRender：把 PCM 写入 SPSC 无锁环形队列
+//     （单写单读、原子下标，零互斥，拷贝即返回）；
+//   - 消费线程（上行 capture 路径）调 ProcessCapture：先排空渲染队列
+//     （skew 重采样 → DelayLine 对齐 → ProcessReverseStream），再做
+//     ProcessStream(AEC/NS/VAD)。APM 全程只被这一个线程触碰。
+//   队列溢出（下行积压超容量）丢最老参考帧并计数——AEC 对少量远端
+//   参考缺失有容忍度，且表明节奏异常应暴露指标。
+//   跨会话天然并行（每会话独立实例+独立队列）。
 //
 // 版本说明：系统包 webrtc-audio-processing 0.3.1（Ubuntu 22.04），
 //   回声消除为 AECM（移动级）；AEC3 需要 webrtc-audio-processing 1.x，
