@@ -127,7 +127,7 @@ enum class MsgType : uint16_t {
 struct Message {
     uint64_t    msg_id;
     MsgType     type;
-    SessionId   session_id;      // 16 字节值类型
+    SessionId   session_id;      // 16 字节值类型，由 JWT 的 uid claim 派生（FNV-1a 双哈希），见 §8
     int64_t     ts_ms;           // 注入时钟的时间戳
     ClipId      clip_id = 0;     // A/B/C 音频归属，0=无
     std::string text;            // 文本载荷
@@ -303,7 +303,8 @@ stateDiagram-v2
 
 #### 6.5.1 水印信号设计
 
-- 波形：两段 **Chirp 扫频音**（如 1kHz→4kHz，各 20ms），间隔固定 `GAP_MS`（如 80ms）。选 Chirp 而非单音：宽带信号互相关峰尖锐，抗扬声器失真与环境噪声，峰值检测信噪比高。
+- 波形：两段 **Chirp 扫频音**（如 1kHz→4kHz，各 20ms），间隔固定 `GAP_MS`（默认 320ms）。选 Chirp 而非单音：宽带信号互相关峰尖锐，抗扬声器失真与环境噪声，峰值检测信噪比高。**间隔长度决定 skew 测量精度**（分辨率 ≈ 1/间隔采样数）：320ms@16kHz=5120 采样，配合抛物线亚采样插值可达 <20ppm；80ms 间隔物理上无法达到该精度。
+- 峰值提取：全量滑动 NCC → 局部最大值 + 非极大抑制 → **抛物线插值亚采样峰位**（200ppm 漂移在间隔上不足 1 个采样，必须亚采样）。
 - 生成：离线生成固定 PCM 模板编译进二进制资源，全会话复用；幅度 -6dBFS 防削波。
 - 注入时机：`WsConnected` 且首次开始上行录音前，由 PlaybackScheduler 在下行队列头部插入水印 clip（`ClipId = WM`，不占用 A/B/C 序号）。**水印播放期间（含检测完成前）上行语音帧直接丢弃，不做识别、不送 ASR**；丢弃帧计数上报 `audio_frames_dropped_total{reason="wm_calib"}`。
 - 水印同样流经 G.711A 通路：检测端用"经 G.711A 编解码后的模板"做相关，避免编解码失真导致相关峰衰减。
@@ -379,14 +380,16 @@ flowchart TD
 ```c
 // wasm 扩展必须导出:
 // 输入: 连接首帧的原始 token 字节 + 对端信息(IP/UA), 宿主注入当前时间
-// 输出: AuthResult { allow: bool, session_id[16], uid_len+uid[], ttl_s, deny_reason[] }
+// 输出: AuthResult { allow: bool, uid_len+uid[], ttl_s, deny_reason[] }
+// 说明: 不单独返回 session_id —— session_id 即 uid（宿主统一由 uid 派生 16 字节 SessionId），
+//       wasm 扩展与内置 JWT 路径产出的 uid 语义完全一致
 int32_t auth_verify(int32_t req_ptr, int32_t req_len);
 ```
 
 - 宿主侧 `AuthProvider` 抽象接口：`AuthResult Verify(const AuthRequest&)`，两个实现：`BuiltinJwtAuth`（jwt-cpp）与 `WasmAuth`（经 WasmModuleManager 调用导出函数）。`main.cpp` 按启动参数装配，业务代码只面向 `AuthProvider`。
 - **Fail-closed**：wasm 调用超时/trap/fuel 耗尽一律视为拒绝（`deny_reason="auth_internal"`），计 `auth_wasm_failures_total`；连续失败超阈值熔断该扩展（§7.2），熔断期全部拒绝（除非配置 `fallback=builtin`）。
 - 认证在**阶段1**执行（连接建立时），不走心跳批处理——这是架构特许：认证无共享状态写入，结果只产生 `kWsConnected`/拒绝+断开。
-- wasm 扩展返回的 `session_id/uid/ttl` 进入 `SessionContext` 与 `OnlineRegistry`，与内置 JWT 路径完全同构。
+- wasm 扩展返回的 `uid/ttl` 进入 `SessionContext` 与 `OnlineRegistry`，与内置 JWT 路径完全同构（内置路径直接从 JWT 的 uid claim 取）。
 - wasm 内禁止网络/文件 IO（无 WASI 能力授予），需要外部数据验证的（如查吊销列表）由宿主定期把数据快照通过 import 推入（`host_auth_get_revocation_view`），保持沙箱纯净。
 
 #### 7.3.3 测试
@@ -492,7 +495,7 @@ flowchart LR
 | 项 | 方案 |
 |----|------|
 | 传输 | WSS（TLS 1.3），内网 gRPC 可 plaintext+mTLS 可配 |
-| 认证 | 连接首帧 JWT，HS256 验签，过期/错签 → `ErrorMsg` 帧 → 关闭 |
+| 认证 | 连接首帧 JWT，HS256 验签，过期/错签 → `ErrorMsg` 帧 → 关闭；**session_id 取自 JWT 的 uid claim**（16 字节 SessionId = FNV-1a(uid) 双哈希，全链路、gRPC `x-session-id`、Redis key 均以此为准） |
 | 防重登 | `OnlineRegistry` + Redis `SET online:{uid} NX EX`，冲突按策略踢旧/拒新；gen 代际号防旧连接消息污染 |
 | 上下文 | Redis 单会话 ≤1MB，超限淘汰最早对话至 50% |
 | RPC 粘性 | 所有 gRPC metadata 带 `x-session-id`，边车一致性哈希路由 |
