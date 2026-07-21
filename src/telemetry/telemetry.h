@@ -73,8 +73,20 @@ public:
     Histogram& MakeHistogram(const std::string& name, const std::string& labels = "",
                              const std::string& help = "");
 
-    // Prometheus 文本格式快照（/metrics 端点内容）
+    // Prometheus 文本格式快照（调试用；生产走 OTLP 推送，见 otlp_exporter.h）
     std::string ExportPrometheus() const;
+
+    // OTLP 导出快照（otlp_exporter 使用）
+    struct CounterSnap { std::string name, labels, help; int64_t value; };
+    struct GaugeSnap { std::string name, labels, help; double value; };
+    struct HistSnap {
+        std::string name, labels, help;
+        std::vector<uint64_t> bucket_counts; // 单桶计数（导出方负责累积）
+        uint64_t total = 0;
+        double sum = 0;
+    };
+    void Snapshot(std::vector<CounterSnap>& counters, std::vector<GaugeSnap>& gauges,
+                  std::vector<HistSnap>& histograms) const;
 
     static Registry& Instance();
 
@@ -86,19 +98,6 @@ private:
     std::vector<CounterEntry> m_counters;
     std::vector<GaugeEntry> m_gauges;
     std::vector<HistEntry> m_histograms;
-};
-
-// 内嵌 /metrics HTTP 服务（独立线程，极简 HTTP/1.0 应答）
-class MetricsServer {
-public:
-    bool Start(uint16_t port); // 端口占用返回 false
-    void Stop();
-
-private:
-    void Loop(int listen_fd);
-    std::thread m_thread;
-    std::atomic<bool> m_running{false};
-    int m_listenFd = -1;
 };
 
 } // namespace mediator::telemetry

@@ -17,6 +17,7 @@
 
 #include "core/log.h"
 #include "mediator.grpc.pb.h"
+#include "opentelemetry/proto/collector/metrics/v1/metrics_service.grpc.pb.h"
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -32,8 +33,13 @@ public:
         ServerContext* ctx,
         ServerReaderWriter<AsrResponse, AsrRequest>* stream) override {
         MDT_INFO("mock asr stream open sid={}",
-                 [&] { auto m = ctx->client_metadata(); auto it = m.find("x-session-id");
-                       return it != m.end() ? std::string(it->second.data()) : "?"; }());
+                 [&] {
+                     auto m = ctx->client_metadata();
+                     auto it = m.find("x-session-id");
+                     return it != m.end()
+                                ? std::string(it->second.data(), it->second.size())
+                                : "?";
+                 }());
         AsrRequest req;
         int frames = 0;
         while (stream->Read(&req)) {
@@ -108,6 +114,28 @@ public:
     }
 };
 
+// mock OTel Collector：接收 OTLP 指标并记录（E2E 断言数据源）
+class MockOtlpCollector final
+    : public opentelemetry::proto::collector::metrics::v1::MetricsService::Service {
+public:
+    grpc::Status Export(
+        ServerContext*,
+        const opentelemetry::proto::collector::metrics::v1::ExportMetricsServiceRequest*
+            req,
+        opentelemetry::proto::collector::metrics::v1::ExportMetricsServiceResponse*)
+        override {
+        std::string svc;
+        int metrics = 0;
+        for (const auto& rm : req->resource_metrics()) {
+            for (const auto& a : rm.resource().attributes())
+                if (a.key() == "service.name") svc = a.value().string_value();
+            for (const auto& sm : rm.scope_metrics()) metrics += sm.metrics_size();
+        }
+        MDT_INFO("otel export received: service={} metrics={}", svc, metrics);
+        return grpc::Status::OK;
+    }
+};
+
 } // namespace mediator
 
 int main(int argc, char** argv) {
@@ -120,6 +148,7 @@ int main(int argc, char** argv) {
     mediator::MockTts tts;
     mediator::MockBusiness biz;
     mediator::MockMemory mem;
+    mediator::MockOtlpCollector otel;
 
     ServerBuilder builder;
     builder.AddListeningPort(addr, grpc::InsecureServerCredentials());
@@ -128,6 +157,7 @@ int main(int argc, char** argv) {
     builder.RegisterService(&tts);
     builder.RegisterService(&biz);
     builder.RegisterService(&mem);
+    builder.RegisterService(&otel);
     auto server = builder.BuildAndStart();
     MDT_INFO("mock services (5-in-1) listening on {}", addr);
     server->Wait();

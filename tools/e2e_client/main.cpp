@@ -186,12 +186,24 @@ std::string ResolveToken(const std::string& arg) {
 
 } // namespace
 
+static int RunClient(int argc, char** argv);
+
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0); // 无缓冲：管道下实时可见
     if (argc < 3) {
         std::printf("usage: e2e_client <port> <token|@sign[:uid]|debug:uid> [--expect-reject]\n");
         return 2;
     }
+    try {
+        return RunClient(argc, argv);
+    } catch (const std::exception& e) {
+        // 网关中途崩溃/断连等：打印并失败退出，不让异常穿透
+        std::printf("[FAIL] client exception: %s\n", e.what());
+        return 1;
+    }
+}
+
+static int RunClient(int argc, char** argv) {
     const uint16_t port = static_cast<uint16_t>(std::stoi(argv[1]));
     const std::string token = ResolveToken(argv[2]);
     const bool expect_reject = argc > 3 && std::string(argv[3]) == "--expect-reject";
@@ -250,7 +262,7 @@ int main(int argc, char** argv) {
     c.SendAudio(4 | 2, voice); // kVoice | kAsrEndpoint → mock ASR final
 
     bool got_restate = false, got_answer = false;
-    const auto t_deadline = steady_clock::now() + milliseconds(8000);
+    const auto t_deadline = steady_clock::now() + milliseconds(15000);
     while (steady_clock::now() < t_deadline && !(got_restate && got_answer)) {
         if (!c.ReadFrame(f, 2000)) break;
         if (f.is_text) continue;

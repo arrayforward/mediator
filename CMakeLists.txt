@@ -86,15 +86,42 @@ if(UNIX)
       ${CMAKE_SOURCE_DIR}/proto/mediator.proto
     DEPENDS ${CMAKE_SOURCE_DIR}/proto/mediator.proto)
 
+  # ---- OTLP（opentelemetry-proto，third_party）----
+  set(OTLP_ROOT ${CMAKE_SOURCE_DIR}/third_party/opentelemetry-proto)
+  set(OTLP_GEN_FILES
+    ${PROTO_GEN}/opentelemetry/proto/common/v1/common.pb.cc
+    ${PROTO_GEN}/opentelemetry/proto/resource/v1/resource.pb.cc
+    ${PROTO_GEN}/opentelemetry/proto/metrics/v1/metrics.pb.cc
+    ${PROTO_GEN}/opentelemetry/proto/collector/metrics/v1/metrics_service.pb.cc
+    ${PROTO_GEN}/opentelemetry/proto/collector/metrics/v1/metrics_service.grpc.pb.cc)
+  add_custom_command(
+    OUTPUT ${OTLP_GEN_FILES}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${PROTO_GEN}
+    COMMAND ${Protobuf_PROTOC_EXECUTABLE}
+      --experimental_allow_proto3_optional
+      --proto_path=${OTLP_ROOT}
+      --cpp_out=${PROTO_GEN}
+      --grpc_out=${PROTO_GEN}
+      --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+      opentelemetry/proto/common/v1/common.proto
+      opentelemetry/proto/resource/v1/resource.proto
+      opentelemetry/proto/metrics/v1/metrics.proto
+      opentelemetry/proto/collector/metrics/v1/metrics_service.proto
+    DEPENDS ${OTLP_ROOT}/opentelemetry/proto/collector/metrics/v1/metrics_service.proto
+    WORKING_DIRECTORY ${OTLP_ROOT})
+
   add_library(mediator_net STATIC
     ${PROTO_GEN}/mediator.pb.cc
     ${PROTO_GEN}/mediator.grpc.pb.cc
+    ${OTLP_GEN_FILES}
     src/net/grpc_clients.cpp
     src/net/ws_server.cpp
     src/gateway.cpp
     src/audio/apm_wrapper.cpp
     src/session/redis_store.cpp
     src/telemetry/telemetry.cpp
+    src/telemetry/otlp_exporter.cpp
+    src/telemetry/metrics_server.cpp
     src/crash/crash_handler.cpp
   )
   target_include_directories(mediator_net PUBLIC ${PROTO_GEN}

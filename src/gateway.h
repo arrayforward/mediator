@@ -24,6 +24,8 @@
 #include "net/grpc_clients.h"
 #include "net/ws_server.h"
 #include "session/redis_store.h"
+#include "telemetry/metrics_server.h"
+#include "telemetry/otlp_exporter.h"
 #include "telemetry/telemetry.h"
 
 namespace mediator::audio { class ApmWrapper; struct ApmCalib; }
@@ -40,7 +42,9 @@ struct GatewayConfig {
     int heartbeat_ms = 20;
     std::string redis_host = "127.0.0.1";
     int redis_port = 6379;
-    uint16_t metrics_port = 0;                    // 0=不启动 /metrics 端点
+    std::string otlp_endpoint;                    // OTel Collector，空=不导出
+    int otlp_interval_s = 10;
+    uint16_t metrics_port = 0;                    // /metrics 抓取端点，0=不启动
     std::string observers;                        // wasm 观察者：name:path,name:path
     bool enable_apm = true;                       // WebRTC APM（AECM/NS/VAD）
 };
@@ -82,6 +86,7 @@ private:
     audio::ApmWrapper* GetApmSession(const SessionId& sid);
 
     std::unique_ptr<session::RedisStore> m_redis;
+    std::unique_ptr<telemetry::OtlpMetricsExporter> m_otlp;
     telemetry::MetricsServer m_metrics;
     ext::WasmBus m_wasmBus;
 

@@ -29,6 +29,10 @@ ApmWrapper::ApmWrapper(ApmCalib calib) : m_calib(calib) {
     m_apm->noise_suppression()->Enable(true);
     m_apm->voice_detection()->Enable(true);
     m_apm->voice_detection()->set_likelihood(webrtc::VoiceDetection::kModerateLikelihood);
+    // 0.3.1：AGC 开启时每帧必须 set_stream_analog_level，否则 ProcessStream
+    // 报 kStreamParameterNotSetError(-11)。网关侧不需要 AGC，直接关闭。
+    m_apm->gain_control()->Enable(false);
+    m_apm->high_pass_filter()->Enable(true); // 高通滤除低频轰声，利于 AEC/VAD
     m_apm->Initialize(kSampleRate, kSampleRate, kSampleRate,
                       webrtc::AudioProcessing::kMono, webrtc::AudioProcessing::kMono,
                       webrtc::AudioProcessing::kMono);
@@ -38,11 +42,13 @@ ApmWrapper::ApmWrapper(ApmCalib calib) : m_calib(calib) {
 ApmWrapper::~ApmWrapper() = default;
 
 void ApmWrapper::SetCalib(ApmCalib c) {
+    std::lock_guard<std::mutex> lk(m_mtx);
     m_calib = c;
     m_delay = std::make_unique<DelayLine>(c.delay_samples);
 }
 
 void ApmWrapper::ProcessRender(const std::vector<int16_t>& pcm) {
+    std::lock_guard<std::mutex> lk(m_mtx);
     auto aligned = (m_calib.skew != 0.0) ? ResampleLinear(pcm, m_calib.skew) : pcm;
     auto delayed = m_delay->Process(aligned);
     m_renderQ.insert(m_renderQ.end(), delayed.begin(), delayed.end());
@@ -65,6 +71,7 @@ void ApmWrapper::FeedRenderFrames() {
 }
 
 ApmResult ApmWrapper::ProcessCapture(const std::vector<int16_t>& pcm) {
+    std::lock_guard<std::mutex> lk(m_mtx);
     ApmResult res;
     m_captureQ.insert(m_captureQ.end(), pcm.begin(), pcm.end());
     m_apm->set_stream_delay_ms(m_calib.delay_samples / (kSampleRate / 1000));

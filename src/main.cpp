@@ -45,6 +45,8 @@ int main(int argc, char** argv) {
     cfg.allow_debug_token = ArgVal(argc, argv, "--allow-debug-token", "false") == "true";
     cfg.redis_host = ArgVal(argc, argv, "--redis-host", "127.0.0.1");
     cfg.redis_port = std::stoi(ArgVal(argc, argv, "--redis-port", "6379"));
+    cfg.otlp_endpoint = ArgVal(argc, argv, "--otel-endpoint", "");
+    cfg.otlp_interval_s = std::stoi(ArgVal(argc, argv, "--otel-interval-s", "10"));
     cfg.metrics_port = static_cast<uint16_t>(std::stoi(ArgVal(argc, argv, "--metrics-port", "0")));
     cfg.observers = ArgVal(argc, argv, "--observers", "");
     cfg.enable_apm = ArgVal(argc, argv, "--enable-apm", "true") == "true";

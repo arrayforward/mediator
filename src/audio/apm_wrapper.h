@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "audio/align.h"
@@ -55,6 +56,9 @@ public:
 
 private:
     void FeedRenderFrames();
+    // webrtc::AudioProcessing 非线程安全：reverse/capture 可能分别来自
+    // 线程池与网络读线程，所有公开入口必须经此锁串行化
+    std::mutex m_mtx;
     ApmCalib m_calib;
     std::unique_ptr<webrtc::AudioProcessing> m_apm;
     std::unique_ptr<DelayLine> m_delay;

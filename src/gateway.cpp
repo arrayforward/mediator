@@ -46,7 +46,17 @@ Gateway::Gateway(GatewayConfig cfg)
     m_redis = std::make_unique<session::RedisStore>(m_cfg.redis_host, m_cfg.redis_port);
     m_redis->Connect();
 
-    // ---- /metrics 端点 ----
+    // ---- OTLP 指标导出（OTel Collector）----
+    if (!m_cfg.otlp_endpoint.empty()) {
+        telemetry::OtlpConfig oc;
+        oc.endpoint = m_cfg.otlp_endpoint;
+        oc.interval_s = m_cfg.otlp_interval_s;
+        oc.instance_id = EngineConfig{}.gw_id;
+        m_otlp = std::make_unique<telemetry::OtlpMetricsExporter>(std::move(oc));
+        m_otlp->Start();
+    }
+
+    // ---- /metrics 抓取端点（备用通道，调试/Collector prometheus receiver）----
     if (m_cfg.metrics_port != 0) m_metrics.Start(m_cfg.metrics_port);
 
     // ---- wasm 观察者订阅（name:path,name:path）----

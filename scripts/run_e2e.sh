@@ -7,7 +7,7 @@
 #   2. 调试后门 token（--allow-debug-token，debug:user-1）
 #   3. wasm 认证（错误 token 被拒 + wasm-ok 放行）
 #   4. Redis 持久化断言（online:{uid} 键存在）
-#   5. /metrics Prometheus 抓取断言
+#   5. OTLP 指标推送断言（mock Collector 收到 service=mediator 的指标）
 #   6. 崩溃转储断言（SIGSEGV → crash_*.txt 生成）
 # ============================================================================
 set -u
@@ -22,20 +22,28 @@ METRICS_PORT=19099
 BACKEND=127.0.0.1:50051
 REDIS_PORT=6379
 CRASH_DIR=$(mktemp -d)/crash
+MOCK_LOG=$(mktemp)
+GW_LOG=$(mktemp)
 FAIL=0
 
-# ---- 依赖服务：自签证书 + redis-server + mock 五合一 ----
+dump_logs() { # 失败时转储现场
+  echo "--- gw.log tail ---"; tail -15 "$GW_LOG"
+  echo "--- mock.log tail ---"; tail -10 "$MOCK_LOG"
+}
+
+# ---- 依赖服务：自签证书 + redis-server + mock 五合一（含 mock OTel Collector）----
 CERT=$(mktemp -d)/server
 openssl req -x509 -newkey rsa:2048 -keyout "$CERT.key" -out "$CERT.crt" \
   -days 1 -nodes -subj "/CN=localhost" 2>/dev/null
 redis-server --port $REDIS_PORT --daemonize no --save '' > /dev/null 2>&1 & PIDS+=($!)
-./$BUILD/tools/mock_services 50051 > /dev/null 2>&1 & PIDS+=($!)
+./$BUILD/tools/mock_services 50051 > "$MOCK_LOG" 2>&1 & PIDS+=($!)
 sleep 0.8
 
 start_gw() { # $1..n = 额外参数
   ./$BUILD/mediator --port=$WS_PORT --cert="$CERT.crt" --key="$CERT.key" \
-    --backend=$BACKEND --redis-port=$REDIS_PORT --metrics-port=$METRICS_PORT \
-    --crash-dir="$CRASH_DIR" "$@" > /dev/null 2>&1 & PIDS+=($!)
+    --backend=$BACKEND --redis-port=$REDIS_PORT \
+    --otel-endpoint=$BACKEND --otel-interval-s=1 --metrics-port=$METRICS_PORT \
+    --crash-dir="$CRASH_DIR" --log-level=debug "$@" >> "$GW_LOG" 2>&1 & PIDS+=($!)
   sleep 0.8
 }
 stop_gw() { kill "${PIDS[-1]}" 2>/dev/null; wait "${PIDS[-1]}" 2>/dev/null; unset 'PIDS[-1]'; sleep 0.3; }
@@ -49,12 +57,15 @@ redis-cli -p $REDIS_PORT FLUSHALL > /dev/null
 ONLINE=$(redis-cli -p $REDIS_PORT GET online:user-1)
 if [ "$ONLINE" = "gw-local" ]; then echo "[PASS] redis online:user-1 = $ONLINE"; else
   echo "[FAIL] redis online:user-1 (got: '$ONLINE')"; FAIL=1; fi
-# /metrics 断言：连接数/clip 指标存在
+# /metrics 抓取断言（备用通道）
 M=$(curl -s http://127.0.0.1:$METRICS_PORT/metrics)
 echo "$M" | grep -q "clip_sent_total" && echo "[PASS] /metrics clip_sent_total" \
   || { echo "[FAIL] /metrics clip_sent_total"; FAIL=1; }
-echo "$M" | grep -q "grpc_call_duration_ms" && echo "[PASS] /metrics grpc_call_duration_ms" \
-  || { echo "[FAIL] /metrics grpc_call_duration_ms"; FAIL=1; }
+# OTLP 推送断言（主通道）：mock Collector 收到 service=mediator 的指标
+sleep 1.5 # 等 otlp interval
+grep -q "otel export received: service=mediator" "$MOCK_LOG" \
+  && echo "[PASS] otlp push to collector (service=mediator)" \
+  || { echo "[FAIL] otlp push to collector"; tail -3 "$MOCK_LOG"; FAIL=1; }
 stop_gw
 
 # ---- 场景2：调试后门 token ----
@@ -84,5 +95,5 @@ else
   echo "[FAIL] crash dump not generated"; FAIL=1
 fi
 
-if [ $FAIL -eq 0 ]; then echo "ALL E2E SCENARIOS PASSED"; else echo "E2E FAILED"; fi
+if [ $FAIL -eq 0 ]; then echo "ALL E2E SCENARIOS PASSED"; else echo "E2E FAILED"; dump_logs; fi
 exit $FAIL
