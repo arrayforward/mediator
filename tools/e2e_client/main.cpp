@@ -26,6 +26,8 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 
+#include "ext/hs256.h"
+
 namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace ws = beast::websocket;
@@ -151,16 +153,47 @@ std::vector<uint8_t> VoiceFrameG711() {
     return cached;
 }
 
+// "@sign[:uid]"：客户端现场签一个真实 HS256 JWT（密钥 dev-secret，exp=now+1h）
+std::string ResolveToken(const std::string& arg) {
+    if (arg.rfind("@sign", 0) != 0) return arg;
+    const std::string uid = arg.size() > 6 ? arg.substr(6) : "user-1";
+    const auto now_s = static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    const std::string payload = "{\"uid\":\"" + uid + "\",\"exp\":" +
+                                std::to_string(now_s + 3600) + "}";
+    static const char* kT =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const auto b64 = [&](const std::string& in) {
+        std::string out;
+        size_t i = 0;
+        for (; i + 2 < in.size(); i += 3) {
+            const uint32_t v = (uint8_t(in[i]) << 16) | (uint8_t(in[i+1]) << 8) | uint8_t(in[i+2]);
+            out += kT[(v>>18)&63]; out += kT[(v>>12)&63]; out += kT[(v>>6)&63]; out += kT[v&63];
+        }
+        if (i < in.size()) {
+            uint32_t v = uint8_t(in[i]) << 16;
+            out += kT[(v>>18)&63];
+            if (i + 1 < in.size()) { v |= uint8_t(in[i+1]) << 8; out += kT[(v>>12)&63]; out += kT[(v>>6)&63]; }
+            else out += kT[(v>>12)&63];
+        }
+        return out;
+    };
+    const std::string input = b64("{\"alg\":\"HS256\",\"typ\":\"JWT\"}") + "." + b64(payload);
+    const auto mac = mediator::ext::HmacSha256("dev-secret", input);
+    return input + "." + b64(std::string(reinterpret_cast<const char*>(mac.data()), 32));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0); // 无缓冲：管道下实时可见
     if (argc < 3) {
-        std::printf("usage: e2e_client <port> <token> [--expect-reject]\n");
+        std::printf("usage: e2e_client <port> <token|@sign[:uid]|debug:uid> [--expect-reject]\n");
         return 2;
     }
     const uint16_t port = static_cast<uint16_t>(std::stoi(argv[1]));
-    const std::string token = argv[2];
+    const std::string token = ResolveToken(argv[2]);
     const bool expect_reject = argc > 3 && std::string(argv[3]) == "--expect-reject";
 
     // ---- 场景0：错误 token 必被拒 ----

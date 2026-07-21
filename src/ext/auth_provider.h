@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -45,16 +46,24 @@ public:
     virtual AuthResult Verify(const AuthRequest& req) = 0;
 };
 
-// 内置实现（stub）：HS256 验签与 uid 提取待接 jwt-cpp；
-// 当前按 "header.payload.signature" 解析 payload 中的 uid 字段（仅测试用途，
-// 生产必须接入真实验签，见 design.md §8）。
+// 内置实现：JWT HS256 真实验签（HMAC-SHA256 + exp 校验，见 ext/hs256.h）。
+// 验签失败/过期/无 uid 一律拒绝（fail-closed）。
+//
+// 调试后门（仅端到端调试用）：启动参数开启后，接受形如 "debug:<uid>" 的
+// 特殊 token 直接放行（免签名），每次使用打 WARN 审计日志。
+// 默认关闭；生产环境严禁开启（网关启动日志有显式告警）。
 class BuiltinJwtAuth final : public AuthProvider {
 public:
-    explicit BuiltinJwtAuth(std::string secret) : m_secret(std::move(secret)) {}
+    explicit BuiltinJwtAuth(std::string secret, bool allow_debug_token = false)
+        : m_secret(std::move(secret)), m_allowDebugToken(allow_debug_token) {}
     AuthResult Verify(const AuthRequest& req) override;
+
+    // 调试 token 前缀："debug:<uid>"
+    static constexpr const char* kDebugPrefix = "debug:";
 
 private:
     std::string m_secret;
+    bool m_allowDebugToken;
 };
 
 // 函数型认证提供者：单测/E2E 注入 wasm 行为（allow/deny/trap/slow）的替身

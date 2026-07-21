@@ -57,7 +57,9 @@ add_library(mediator_core STATIC
   src/audio/align.cpp
   src/session/context_evict.cpp
   src/ext/auth_provider.cpp
+  src/ext/hs256.cpp
   src/ext/wasm3_host.cpp
+  src/ext/wasm_bus.cpp
 )
 target_include_directories(mediator_core PUBLIC src)
 target_link_libraries(mediator_core PUBLIC spdlog::spdlog wasm3)
@@ -68,6 +70,8 @@ if(UNIX)
   find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(GRPCPP REQUIRED grpc++)
+  pkg_check_modules(WEBRTC_APM REQUIRED webrtc-audio-processing)
+  pkg_check_modules(HIREDIS REQUIRED hiredis)
 
   set(PROTO_GEN ${CMAKE_BINARY_DIR}/proto_gen)
   file(MAKE_DIRECTORY ${PROTO_GEN})
@@ -88,14 +92,30 @@ if(UNIX)
     src/net/grpc_clients.cpp
     src/net/ws_server.cpp
     src/gateway.cpp
+    src/audio/apm_wrapper.cpp
+    src/session/redis_store.cpp
+    src/telemetry/telemetry.cpp
+    src/crash/crash_handler.cpp
   )
-  target_include_directories(mediator_net PUBLIC ${PROTO_GEN} ${GRPCPP_INCLUDE_DIRS})
-  target_link_directories(mediator_net PUBLIC ${GRPCPP_LIBRARY_DIRS})
+  target_include_directories(mediator_net PUBLIC ${PROTO_GEN}
+    ${GRPCPP_INCLUDE_DIRS} ${WEBRTC_APM_INCLUDE_DIRS} ${HIREDIS_INCLUDE_DIRS})
+  target_compile_options(mediator_net PUBLIC ${WEBRTC_APM_CFLAGS_OTHER})
+  target_link_directories(mediator_net PUBLIC ${GRPCPP_LIBRARY_DIRS}
+    ${WEBRTC_APM_LIBRARY_DIRS} ${HIREDIS_LIBRARY_DIRS})
   target_link_libraries(mediator_net PUBLIC mediator_core
-    ${GRPCPP_LIBRARIES} protobuf ssl crypto pthread)
+    ${GRPCPP_LIBRARIES} ${WEBRTC_APM_LIBRARIES} ${HIREDIS_LIBRARIES}
+    protobuf ssl crypto pthread)
 
   add_executable(mediator src/main.cpp)
   target_link_libraries(mediator PRIVATE mediator_net)
+
+  # 符号流水线（§7B.2）：抽调试符号 + strip + debuglink 关联
+  # （部分 binutils 的 strip 不支持 --add-gnu-debuglink，统一用 objcopy）
+  add_custom_target(symbols
+    COMMAND objcopy --only-keep-debug mediator mediator.debug
+    COMMAND objcopy --strip-debug --add-gnu-debuglink=mediator.debug mediator
+    DEPENDS mediator
+    COMMENT "extract debug symbols -> mediator.debug (addr2line/minidump_stackwalk)")
 
   add_subdirectory(tools)
 else()

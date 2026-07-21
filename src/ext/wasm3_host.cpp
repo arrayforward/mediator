@@ -94,6 +94,37 @@ int Wasm3Module::CallAuthVerify(const std::string& token) {
     return static_cast<int>(ret);
 }
 
+bool Wasm3Module::HasFunction(const char* name) {
+    if (!m_rt) return false;
+    IM3Function fn = nullptr;
+    return m3_FindFunction(&fn, m_rt, name) == m3Err_none && fn != nullptr;
+}
+
+bool Wasm3Module::CallOnMessage(int32_t msg_type, const std::vector<uint8_t>& payload,
+                                uint32_t offset) {
+    if (!m_rt) return false;
+    IM3Function fn = nullptr;
+    if (m3_FindFunction(&fn, m_rt, "on_message") != m3Err_none || !fn) return false;
+    uint32_t mem_size = 0;
+    uint8_t* mem = m3_GetMemory(m_rt, &mem_size, 0);
+    if (!mem || offset + payload.size() > mem_size) return false;
+    if (!payload.empty()) std::memcpy(mem + offset, payload.data(), payload.size());
+    const std::string a0 = std::to_string(msg_type);
+    const std::string a1 = std::to_string(offset);
+    const std::string a2 = std::to_string(payload.size());
+    const char* argv[] = {a0.c_str(), a1.c_str(), a2.c_str()};
+    return m3_CallArgv(fn, 3, argv) == m3Err_none;
+}
+
+bool Wasm3Module::ReadMemory(uint32_t offset, void* out, size_t len) {
+    if (!m_rt) return false;
+    uint32_t mem_size = 0;
+    uint8_t* mem = m3_GetMemory(m_rt, &mem_size, 0);
+    if (!mem || offset + len > mem_size) return false;
+    std::memcpy(out, mem + offset, len);
+    return true;
+}
+
 // ---- WasmModuleManager ----
 
 bool WasmModuleManager::Load(const std::string& name, const std::string& path) {

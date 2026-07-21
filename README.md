@@ -70,6 +70,29 @@ third_party/wasm3/
 
 ## 当前状态
 
-已落地并通过测试：四阶段心跳引擎、三段式音频流水线（安抚/复述/答案 + 场景化占位与复用）、WSS(JWT/wasm 双认证)、水印 AEC 标定回环验证、gRPC 五服务客户端、52+ 单元测试、双场景 E2E。
+全部模块已落地，**66 单元测试 + 6 类 E2E 场景全绿**（`bash scripts/run_e2e.sh`）：
 
-待接入：WebRTC APM（AEC3 本体）、Redis 实体（hiredis）、OTel 指标导出、Breakpad 崩溃转储、jwt-cpp 真实验签（当前为结构解析 stub，禁止上线）、wasm 观察者消息扩展。
+- 四阶段心跳引擎 + 三段式音频流水线（安抚/复述/答案 + 场景化占位与复用）
+- WSS(TLS) + **JWT HS256 真实验签**（HMAC-SHA256+exp）+ 调试后门 token（`--allow-debug-token`，`debug:<uid>` 免签名，仅 E2E 调试用）
+- **wasm3** 认证扩展（`--auth-provider=wasm:<path>`）+ wasm 观察者消息扩展（trap 熔断）
+- **WebRTC APM**（AECM/NS/VAD，系统包 0.3.1）+ 双音水印标定（回环 E2E 真实检出）
+- **Redis**（hiredis）：在线状态、上下文/占位音频持久化、断线重连恢复
+- **指标**：OTel 语义 API + Prometheus `/metrics` 端点（`--metrics-port`）
+- **崩溃转储**：signal handler + backtrace 转储（`--crash-dir`）、`symbols` target 抽调试符号、`scripts/symbolize.sh` 还原行号（PIE 偏移）
+
+偏差说明（AECM vs AEC3、Prometheus vs OTel SDK、自研转储 vs Breakpad）见 [docs/design.md](docs/design.md) §10A。
+
+## 启动参数
+
+```
+--port --cert --key            WSS 监听与 TLS 证书
+--backend                      后端 gRPC 地址
+--auth-provider=builtin|wasm:<path>
+--jwt-secret                   HS256 验签密钥
+--allow-debug-token=true       调试后门 token（生产严禁）
+--redis-host --redis-port      Redis 持久化
+--metrics-port                 Prometheus /metrics 端点
+--observers=name:path,...      wasm 观察者订阅
+--crash-dir                    崩溃转储目录
+--enable-apm=false             关闭 WebRTC APM
+```

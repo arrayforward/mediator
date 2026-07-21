@@ -59,6 +59,8 @@ enum class MsgType : uint16_t {
     kControlAck,
     kMemoryAck,
     kWmDetected,
+    kCtxRestored,          // Redis 恢复聊天上下文（text=ctx）
+    kPlaceholderRestored,  // Redis 恢复上一次占位音频（payload=g711）
     kTickSessionGC,
     kTickRedisSync,
     kTickMetrics,

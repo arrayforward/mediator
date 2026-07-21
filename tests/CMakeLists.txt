@@ -3,7 +3,7 @@ find_program(WAT2WASM wat2wasm)
 set(WASM_OUT_DIR ${CMAKE_BINARY_DIR}/tests/wasm)
 file(MAKE_DIRECTORY ${WASM_OUT_DIR})
 if(WAT2WASM)
-  foreach(m auth_allow auth_trap)
+  foreach(m auth_allow auth_trap msg_counter msg_trap)
     add_custom_command(
       OUTPUT ${WASM_OUT_DIR}/${m}.wasm
       COMMAND ${WAT2WASM} ${CMAKE_CURRENT_SOURCE_DIR}/wasm/${m}.wat -o ${WASM_OUT_DIR}/${m}.wasm
@@ -24,7 +24,12 @@ add_executable(mediator_tests
   test_auth.cpp
   test_heartbeat.cpp
   test_wasm3.cpp
+  test_wasm_bus.cpp
 )
+if(UNIX)
+  target_sources(mediator_tests PRIVATE test_telemetry.cpp)
+  target_link_libraries(mediator_tests PRIVATE mediator_net)
+endif()
 target_compile_definitions(mediator_tests PRIVATE MEDIATOR_WASM_DIR="${WASM_OUT_DIR}")
 target_link_libraries(mediator_tests PRIVATE mediator_core GTest::gtest_main)
 if(TARGET wasm_test_modules)

@@ -24,6 +24,7 @@
 #include "core/log.h"
 #include "engine/message.h"
 #include "net/grpc_clients.h" // SidHex
+#include "telemetry/telemetry.h"
 
 namespace mediator::net {
 
@@ -123,6 +124,10 @@ void WsServer::SessionThread(std::shared_ptr<Conn> conn) {
         ext::AuthRequest areq{token, "", g_clock.NowMs()};
         const auto auth_res = m_auth->Verify(areq);
         if (!auth_res.allow) {
+            telemetry::Registry::Instance()
+                .MakeCounter("ws_auth_failures_total", "reason=\"" + auth_res.deny_reason + "\"",
+                             "JWT/wasm auth failures")
+                .Add();
             MDT_WARN("auth failed: {}", auth_res.deny_reason);
             stream.text(true);
             stream.write(asio::buffer(std::string("{\"ok\":false,\"reason\":\"") +
@@ -141,6 +146,9 @@ void WsServer::SessionThread(std::shared_ptr<Conn> conn) {
         stream.write(asio::buffer(std::string("{\"ok\":true,\"uid\":\"") + conn->uid +
                                   "\",\"gen\":" + std::to_string(conn->gen) + "}"));
         MDT_INFO("session connected uid={} gen={}", conn->uid, conn->gen);
+        telemetry::Registry::Instance()
+            .MakeGauge("ws_connections_active", "", "active WSS connections")
+            .Set(static_cast<double>(ConnectionCount()));
 
         Message c;
         c.type = MsgType::kWsConnected;
@@ -225,6 +233,9 @@ void WsServer::SessionThread(std::shared_ptr<Conn> conn) {
         d.ts_ms = g_clock.NowMs();
         m_cb.inject(std::move(d));
         MDT_INFO("session disconnected uid={}", conn->uid);
+        telemetry::Registry::Instance()
+            .MakeGauge("ws_connections_active", "", "active WSS connections")
+            .Set(static_cast<double>(ConnectionCount()));
     }
 }
 

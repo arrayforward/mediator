@@ -1,37 +1,40 @@
+// ============================================================================
+// auth_provider.cpp — 认证提供者实现
+//
+// BuiltinJwtAuth：委托 ext/hs256 做真实 HS256 验签（HMAC-SHA256 常时间比较
+// + exp 过期校验），通过后取 payload 的 uid 作为会话身份。
+// ============================================================================
 #include "ext/auth_provider.h"
+
+#include "core/log.h"
+#include "ext/hs256.h"
+
+#include <cstring>
 
 namespace mediator::ext {
 
-namespace {
-// 极简 payload 字段提取（测试用）：查找 "uid":"xxx"
-std::string ExtractUid(const std::string& payload) {
-    const std::string key = "\"uid\":\"";
-    auto pos = payload.find(key);
-    if (pos == std::string::npos) return {};
-    pos += key.size();
-    auto end = payload.find('"', pos);
-    if (end == std::string::npos) return {};
-    return payload.substr(pos, end - pos);
-}
-} // namespace
-
 AuthResult BuiltinJwtAuth::Verify(const AuthRequest& req) {
     AuthResult r;
-    const auto dot1 = req.token.find('.');
-    const auto dot2 = req.token.rfind('.');
-    if (dot1 == std::string::npos || dot2 == dot1 || m_secret.empty()) {
-        r.deny_reason = "bad_format";
-        return r;
+    // 调试后门（仅 E2E 调试，启动参数显式开启才生效）
+    if (m_allowDebugToken && req.token.rfind(kDebugPrefix, 0) == 0) {
+        const std::string uid = req.token.substr(std::strlen(kDebugPrefix));
+        if (!uid.empty()) {
+            MDT_WARN("DEBUG TOKEN used, uid={} (disable --allow-debug-token in prod!)",
+                     uid);
+            r.allow = true;
+            r.uid = uid;
+            r.ttl_s = 600;
+            return r;
+        }
     }
-    // TODO(prod): HS256/RS256 真实验签（jwt-cpp）。当前仅结构解析，禁止上线。
-    const std::string payload = req.token.substr(dot1 + 1, dot2 - dot1 - 1);
-    r.uid = ExtractUid(payload);
-    if (r.uid.empty()) {
-        r.deny_reason = "no_uid";
+    const auto claims = VerifyHs256Jwt(req.token, m_secret, req.now_ms);
+    if (!claims.valid) {
+        r.deny_reason = claims.error;
         return r;
     }
     r.allow = true;
-    r.ttl_s = 3600;
+    r.uid = claims.uid;
+    r.ttl_s = claims.exp > 0 ? static_cast<int>(claims.exp - req.now_ms / 1000) : 3600;
     return r;
 }
 

@@ -29,6 +29,26 @@ void HeartbeatEngine::ProcessOne(const Message& m, ChangeSet& cs) {
     case MsgType::kLlmFinalAnswer: OnLlmText(m, cs); break;
     case MsgType::kTtsAudioChunk: OnTtsChunk(m, cs); break;
     case MsgType::kWmDetected: OnWmDetected(m, cs); break;
+    case MsgType::kCtxRestored: {
+        // Redis 恢复：断线重连后找回聊天上下文
+        auto* s = m_board.FindSession(m.session_id);
+        if (s && !m.text.empty()) {
+            s->m_chatCtx = m.text;
+            m_board.MarkChanged(m.session_id);
+        }
+        break;
+    }
+    case MsgType::kPlaceholderRestored: {
+        // Redis 恢复：上一次占位音频（供安抚文本未就绪时复用）
+        auto* s = m_board.FindSession(m.session_id);
+        if (s && !m.payload.empty()) {
+            s->m_lastPlaceholder.id = clip::kPlaceholder;
+            s->m_lastPlaceholder.g711 = m.payload;
+            s->m_lastPlaceholder.audio_ready = true;
+            s->m_hasLastPlaceholder = true;
+        }
+        break;
+    }
     case MsgType::kWsControlCmd:
         cs.grpc_calls.push_back(
             GrpcCall{"business", "control", m.session_id, clip::kNone, m.text});
@@ -56,6 +76,9 @@ void HeartbeatEngine::OnWsConnected(const Message& m, ChangeSet& cs) {
     m_board.RegisterOnline(m.text, m_cfg.gw_id, gen);
     cs.redis_ops.push_back(
         RedisOp{"SETEX", "online:" + m.text, m_cfg.gw_id, 300});
+    // 连接建立（含重连）：异步恢复上下文与上一次占位音频（§6.4 断线续聊）
+    cs.redis_ops.push_back(RedisOp{"GET", "ctx:" + m.text, "", 0});
+    cs.redis_ops.push_back(RedisOp{"GET", "placeholder:" + m.text, "", 0});
     // 未完成 AEC 标定 → 发水印并进入标定期（上行语音直接丢弃）
     if (!s.m_aecCalib.valid && !s.m_wmPending) {
         s.m_wmPending = true;

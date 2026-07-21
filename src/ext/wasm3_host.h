@@ -48,6 +48,13 @@ public:
     // 认证 ABI：调用导出的 auth_verify；返回 <0 表示内部错误（fail-closed）
     int CallAuthVerify(const std::string& token);
 
+    // 观察者 ABI：检查导出 + 调用 on_message(type, ptr, len)；返回 false=trap
+    bool HasFunction(const char* name);
+    bool CallOnMessage(int32_t msg_type, const std::vector<uint8_t>& payload,
+                       uint32_t offset);
+    // 读线性内存（测试断言用）
+    bool ReadMemory(uint32_t offset, void* out, size_t len);
+
     const std::string& LastError() const { return m_lastError; }
 
     static constexpr uint32_t kTokenOffset = 1024; // token 写入线性内存的固定偏移

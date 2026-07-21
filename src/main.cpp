@@ -20,6 +20,7 @@
 #if defined(__unix__) || defined(__linux__)
 
 #include "core/log.h"
+#include "crash/crash_handler.h"
 #include "gateway.h"
 
 namespace {
@@ -41,8 +42,22 @@ int main(int argc, char** argv) {
     cfg.backend_addr = ArgVal(argc, argv, "--backend", "127.0.0.1:50051");
     cfg.auth_provider = ArgVal(argc, argv, "--auth-provider", "builtin");
     cfg.jwt_secret = ArgVal(argc, argv, "--jwt-secret", "dev-secret");
+    cfg.allow_debug_token = ArgVal(argc, argv, "--allow-debug-token", "false") == "true";
+    cfg.redis_host = ArgVal(argc, argv, "--redis-host", "127.0.0.1");
+    cfg.redis_port = std::stoi(ArgVal(argc, argv, "--redis-port", "6379"));
+    cfg.metrics_port = static_cast<uint16_t>(std::stoi(ArgVal(argc, argv, "--metrics-port", "0")));
+    cfg.observers = ArgVal(argc, argv, "--observers", "");
+    cfg.enable_apm = ArgVal(argc, argv, "--enable-apm", "true") == "true";
 
     mediator::Log::Init(ArgVal(argc, argv, "--log-level", "info"));
+
+    // 崩溃转储（§7B）：安装信号处理器 + 补报历史崩溃
+    mediator::crash::CrashConfig ccfg;
+    ccfg.dump_dir = ArgVal(argc, argv, "--crash-dir", "/var/crash/mediator");
+    if (const auto prev = mediator::crash::CountExistingDumps(ccfg.dump_dir); prev > 0)
+        MDT_WARN("found {} previous crash dumps in {}", prev, ccfg.dump_dir);
+    mediator::crash::InstallCrashHandler(ccfg);
+
     try {
         mediator::Gateway gw(std::move(cfg));
         gw.Run();
