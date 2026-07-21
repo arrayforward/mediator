@@ -78,23 +78,21 @@ WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
     //    必须亚采样插值才能达到设计文档 <20ppm 的精度要求。
     struct Peak { double pos; double v; };
     std::vector<Peak> peaks;
-    for (int s = 1; s < span; ++s) {
+    for (int s = 0; s <= span; ++s) { // 注意覆盖边界：水印可能正好在缓冲起点
         if (ncc[s] < cfg.ncc_threshold) continue;
-        if (ncc[s] < ncc[s - 1] || ncc[s] < ncc[s + 1]) continue; // 局部最大
-        if (!peaks.empty() && s - peaks.back().pos < m) {          // NMS：留更高者
-            if (ncc[s] > peaks.back().v) {
-                // 抛物线插值：y = a x^2 + b x + c，顶点 x = 0.5*(y-1 - y+1)/(y-1 - 2y0 + y+1)
-                const double denom = ncc[s - 1] - 2.0 * ncc[s] + ncc[s + 1];
-                const double off = (denom != 0.0)
-                                       ? 0.5 * (ncc[s - 1] - ncc[s + 1]) / denom
-                                       : 0.0;
-                peaks.back() = {s + off, ncc[s]};
-            }
+        const double prev = (s > 0) ? ncc[s - 1] : -1.0;
+        const double next = (s < span) ? ncc[s + 1] : -1.0;
+        if (ncc[s] < prev || ncc[s] < next) continue; // 局部最大
+        // 抛物线插值（仅内部点）：顶点 x = 0.5*(y-1 - y+1)/(y-1 - 2y0 + y+1)
+        double off = 0.0;
+        if (s > 0 && s < span) {
+            const double denom = ncc[s - 1] - 2.0 * ncc[s] + ncc[s + 1];
+            if (denom != 0.0) off = 0.5 * (ncc[s - 1] - ncc[s + 1]) / denom;
+        }
+        if (!peaks.empty() && s - peaks.back().pos < m) { // NMS：留更高者
+            if (ncc[s] > peaks.back().v) peaks.back() = {s + off, ncc[s]};
             continue;
         }
-        const double denom = ncc[s - 1] - 2.0 * ncc[s] + ncc[s + 1];
-        const double off =
-            (denom != 0.0) ? 0.5 * (ncc[s - 1] - ncc[s + 1]) / denom : 0.0;
         peaks.push_back({s + off, ncc[s]});
     }
     if (peaks.size() < 2) return res;

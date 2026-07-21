@@ -1,0 +1,72 @@
+// ============================================================================
+// mediator.proto — 网关与后端微服务的 gRPC 接口契约
+//
+// 所有方法均通过 client context metadata "x-session-id" 携带会话 ID
+// （16 字节 SessionId 的 hex 编码），供边车做一致性哈希粘性路由。
+// ============================================================================
+syntax = "proto3";
+
+package mediator;
+
+// ---- ASR：双向流式语音识别 ----
+service AsrService {
+  rpc StreamingRecognize(stream AsrRequest) returns (stream AsrResponse);
+}
+message AsrRequest {
+  bytes pcm = 1;      // PCM16 16kHz 单声道（网关已做 AEC/NS，E2E 中为原始帧）
+  uint32 flags = 2;   // 与网关 msgflag 对齐：1=VAD断句 2=ASR语义断句 4=有声
+}
+message AsrResponse {
+  string text = 1;
+  bool is_final = 2;
+}
+
+// ---- LLM：大模型文本生成（quick/restate/answer/quick_placeholder 共用） ----
+service LlmService {
+  rpc Generate(LlmRequest) returns (LlmResponse);
+}
+message LlmRequest {
+  string method = 1;   // quick / restate / answer / quick_placeholder
+  string text = 2;     // 用户问题或上下文
+  string session_id = 3;
+}
+message LlmResponse {
+  string text = 1;
+}
+
+// ---- TTS：文本转语音 ----
+service TtsService {
+  rpc Synth(TtsRequest) returns (TtsResponse);
+}
+message TtsRequest {
+  string text = 1;
+  string session_id = 2;
+  uint32 clip_id = 3;  // 业务语义 clip：2=安抚 3=复述 4=答案 5=占位
+}
+message TtsResponse {
+  bytes pcm = 1;       // PCM16 16kHz 单声道（网关侧再编 G.711A）
+}
+
+// ---- 业务控制指令 ----
+service BusinessService {
+  rpc Control(ControlRequest) returns (ControlResponse);
+}
+message ControlRequest {
+  string cmd = 1;
+  string session_id = 2;
+}
+message ControlResponse {
+  string ack = 1;
+}
+
+// ---- 记忆服务：长期离线会话的上下文收割 ----
+service MemoryService {
+  rpc FetchContext(MemoryRequest) returns (MemoryResponse);
+}
+message MemoryRequest {
+  string redis_key = 1;   // ctx:{uid}，记忆服务自行去 Redis 取 1MB 上下文
+  string session_id = 2;
+}
+message MemoryResponse {
+  bool ok = 1;
+}

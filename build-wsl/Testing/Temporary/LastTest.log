@@ -1,0 +1,1434 @@
+Start testing: Jul 21 18:17 CST
+----------------------------------------------------------
+1/53 Testing: CopyChannel.DeepCopyOnSend
+1/53 Test: CopyChannel.DeepCopyOnSend
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=CopyChannel.DeepCopyOnSend" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"CopyChannel.DeepCopyOnSend" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = CopyChannel.DeepCopyOnSend
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CopyChannel
+[ RUN      ] CopyChannel.DeepCopyOnSend
+[       OK ] CopyChannel.DeepCopyOnSend (0 ms)
+[----------] 1 test from CopyChannel (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"CopyChannel.DeepCopyOnSend" end time: Jul 21 18:17 CST
+"CopyChannel.DeepCopyOnSend" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/53 Testing: CopyChannel.SwapOutAllDrainsQueue
+2/53 Test: CopyChannel.SwapOutAllDrainsQueue
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=CopyChannel.SwapOutAllDrainsQueue" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"CopyChannel.SwapOutAllDrainsQueue" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = CopyChannel.SwapOutAllDrainsQueue
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CopyChannel
+[ RUN      ] CopyChannel.SwapOutAllDrainsQueue
+[       OK ] CopyChannel.SwapOutAllDrainsQueue (0 ms)
+[----------] 1 test from CopyChannel (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"CopyChannel.SwapOutAllDrainsQueue" end time: Jul 21 18:17 CST
+"CopyChannel.SwapOutAllDrainsQueue" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/53 Testing: CopyChannel.BlockingRecvUnblocksOnClose
+3/53 Test: CopyChannel.BlockingRecvUnblocksOnClose
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=CopyChannel.BlockingRecvUnblocksOnClose" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"CopyChannel.BlockingRecvUnblocksOnClose" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = CopyChannel.BlockingRecvUnblocksOnClose
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CopyChannel
+[ RUN      ] CopyChannel.BlockingRecvUnblocksOnClose
+[       OK ] CopyChannel.BlockingRecvUnblocksOnClose (20 ms)
+[----------] 1 test from CopyChannel (20 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (20 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"CopyChannel.BlockingRecvUnblocksOnClose" end time: Jul 21 18:17 CST
+"CopyChannel.BlockingRecvUnblocksOnClose" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/53 Testing: PriorityTimer.ExecutesInDueOrder
+4/53 Test: PriorityTimer.ExecutesInDueOrder
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=PriorityTimer.ExecutesInDueOrder" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"PriorityTimer.ExecutesInDueOrder" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = PriorityTimer.ExecutesInDueOrder
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PriorityTimer
+[ RUN      ] PriorityTimer.ExecutesInDueOrder
+[       OK ] PriorityTimer.ExecutesInDueOrder (0 ms)
+[----------] 1 test from PriorityTimer (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"PriorityTimer.ExecutesInDueOrder" end time: Jul 21 18:17 CST
+"PriorityTimer.ExecutesInDueOrder" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/53 Testing: PriorityTimer.SkippableTaskDroppedWhenLateOver1s
+5/53 Test: PriorityTimer.SkippableTaskDroppedWhenLateOver1s
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=PriorityTimer.SkippableTaskDroppedWhenLateOver1s" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"PriorityTimer.SkippableTaskDroppedWhenLateOver1s" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = PriorityTimer.SkippableTaskDroppedWhenLateOver1s
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PriorityTimer
+[ RUN      ] PriorityTimer.SkippableTaskDroppedWhenLateOver1s
+[       OK ] PriorityTimer.SkippableTaskDroppedWhenLateOver1s (0 ms)
+[----------] 1 test from PriorityTimer (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"PriorityTimer.SkippableTaskDroppedWhenLateOver1s" end time: Jul 21 18:17 CST
+"PriorityTimer.SkippableTaskDroppedWhenLateOver1s" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/53 Testing: PriorityTimer.MessageTaskNeverSkipped
+6/53 Test: PriorityTimer.MessageTaskNeverSkipped
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=PriorityTimer.MessageTaskNeverSkipped" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"PriorityTimer.MessageTaskNeverSkipped" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = PriorityTimer.MessageTaskNeverSkipped
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PriorityTimer
+[ RUN      ] PriorityTimer.MessageTaskNeverSkipped
+[       OK ] PriorityTimer.MessageTaskNeverSkipped (0 ms)
+[----------] 1 test from PriorityTimer (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"PriorityTimer.MessageTaskNeverSkipped" end time: Jul 21 18:17 CST
+"PriorityTimer.MessageTaskNeverSkipped" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/53 Testing: PriorityTimer.SkippableRunsWhenWithinThreshold
+7/53 Test: PriorityTimer.SkippableRunsWhenWithinThreshold
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=PriorityTimer.SkippableRunsWhenWithinThreshold" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"PriorityTimer.SkippableRunsWhenWithinThreshold" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = PriorityTimer.SkippableRunsWhenWithinThreshold
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PriorityTimer
+[ RUN      ] PriorityTimer.SkippableRunsWhenWithinThreshold
+[       OK ] PriorityTimer.SkippableRunsWhenWithinThreshold (0 ms)
+[----------] 1 test from PriorityTimer (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"PriorityTimer.SkippableRunsWhenWithinThreshold" end time: Jul 21 18:17 CST
+"PriorityTimer.SkippableRunsWhenWithinThreshold" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/53 Testing: Reactor.TaskIdsIncreaseAndStatsRecorded
+8/53 Test: Reactor.TaskIdsIncreaseAndStatsRecorded
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Reactor.TaskIdsIncreaseAndStatsRecorded" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Reactor.TaskIdsIncreaseAndStatsRecorded" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Reactor.TaskIdsIncreaseAndStatsRecorded
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Reactor
+[ RUN      ] Reactor.TaskIdsIncreaseAndStatsRecorded
+[       OK ] Reactor.TaskIdsIncreaseAndStatsRecorded (0 ms)
+[----------] 1 test from Reactor (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Reactor.TaskIdsIncreaseAndStatsRecorded" end time: Jul 21 18:17 CST
+"Reactor.TaskIdsIncreaseAndStatsRecorded" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/53 Testing: Reactor.SlowCpuTaskTriggersWarn
+9/53 Test: Reactor.SlowCpuTaskTriggersWarn
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Reactor.SlowCpuTaskTriggersWarn" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Reactor.SlowCpuTaskTriggersWarn" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Reactor.SlowCpuTaskTriggersWarn
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Reactor
+[ RUN      ] Reactor.SlowCpuTaskTriggersWarn
+[       OK ] Reactor.SlowCpuTaskTriggersWarn (0 ms)
+[----------] 1 test from Reactor (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Reactor.SlowCpuTaskTriggersWarn" end time: Jul 21 18:17 CST
+"Reactor.SlowCpuTaskTriggersWarn" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/53 Testing: Reactor.IoTaskThresholdIs1s
+10/53 Test: Reactor.IoTaskThresholdIs1s
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Reactor.IoTaskThresholdIs1s" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Reactor.IoTaskThresholdIs1s" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Reactor.IoTaskThresholdIs1s
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Reactor
+[ RUN      ] Reactor.IoTaskThresholdIs1s
+[       OK ] Reactor.IoTaskThresholdIs1s (0 ms)
+[----------] 1 test from Reactor (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Reactor.IoTaskThresholdIs1s" end time: Jul 21 18:17 CST
+"Reactor.IoTaskThresholdIs1s" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/53 Testing: G711.RoundTripSmallError
+11/53 Test: G711.RoundTripSmallError
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=G711.RoundTripSmallError" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"G711.RoundTripSmallError" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = G711.RoundTripSmallError
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from G711
+[ RUN      ] G711.RoundTripSmallError
+[       OK ] G711.RoundTripSmallError (0 ms)
+[----------] 1 test from G711 (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"G711.RoundTripSmallError" end time: Jul 21 18:17 CST
+"G711.RoundTripSmallError" time elapsed: 00:00:00
+----------------------------------------------------------
+
+12/53 Testing: G711.ZeroRoundTrip
+12/53 Test: G711.ZeroRoundTrip
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=G711.ZeroRoundTrip" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"G711.ZeroRoundTrip" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = G711.ZeroRoundTrip
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from G711
+[ RUN      ] G711.ZeroRoundTrip
+[       OK ] G711.ZeroRoundTrip (0 ms)
+[----------] 1 test from G711 (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"G711.ZeroRoundTrip" end time: Jul 21 18:17 CST
+"G711.ZeroRoundTrip" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/53 Testing: G711.VectorCodecLength
+13/53 Test: G711.VectorCodecLength
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=G711.VectorCodecLength" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"G711.VectorCodecLength" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = G711.VectorCodecLength
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from G711
+[ RUN      ] G711.VectorCodecLength
+[       OK ] G711.VectorCodecLength (0 ms)
+[----------] 1 test from G711 (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"G711.VectorCodecLength" end time: Jul 21 18:17 CST
+"G711.VectorCodecLength" time elapsed: 00:00:00
+----------------------------------------------------------
+
+14/53 Testing: Watermark.DetectsDelayAndSkewWithinTolerance
+14/53 Test: Watermark.DetectsDelayAndSkewWithinTolerance
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Watermark.DetectsDelayAndSkewWithinTolerance" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Watermark.DetectsDelayAndSkewWithinTolerance" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Watermark.DetectsDelayAndSkewWithinTolerance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Watermark
+[ RUN      ] Watermark.DetectsDelayAndSkewWithinTolerance
+[       OK ] Watermark.DetectsDelayAndSkewWithinTolerance (4 ms)
+[----------] 1 test from Watermark (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Watermark.DetectsDelayAndSkewWithinTolerance" end time: Jul 21 18:17 CST
+"Watermark.DetectsDelayAndSkewWithinTolerance" time elapsed: 00:00:00
+----------------------------------------------------------
+
+15/53 Testing: Watermark.NegativeSkewDetected
+15/53 Test: Watermark.NegativeSkewDetected
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Watermark.NegativeSkewDetected" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Watermark.NegativeSkewDetected" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Watermark.NegativeSkewDetected
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Watermark
+[ RUN      ] Watermark.NegativeSkewDetected
+[       OK ] Watermark.NegativeSkewDetected (4 ms)
+[----------] 1 test from Watermark (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Watermark.NegativeSkewDetected" end time: Jul 21 18:17 CST
+"Watermark.NegativeSkewDetected" time elapsed: 00:00:00
+----------------------------------------------------------
+
+16/53 Testing: Watermark.NoFalsePositiveOnSilence
+16/53 Test: Watermark.NoFalsePositiveOnSilence
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Watermark.NoFalsePositiveOnSilence" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Watermark.NoFalsePositiveOnSilence" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Watermark.NoFalsePositiveOnSilence
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Watermark
+[ RUN      ] Watermark.NoFalsePositiveOnSilence
+[       OK ] Watermark.NoFalsePositiveOnSilence (5 ms)
+[----------] 1 test from Watermark (5 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (5 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"Watermark.NoFalsePositiveOnSilence" end time: Jul 21 18:17 CST
+"Watermark.NoFalsePositiveOnSilence" time elapsed: 00:00:00
+----------------------------------------------------------
+
+17/53 Testing: Watermark.NoFalsePositiveOnPureNoise
+17/53 Test: Watermark.NoFalsePositiveOnPureNoise
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Watermark.NoFalsePositiveOnPureNoise" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Watermark.NoFalsePositiveOnPureNoise" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Watermark.NoFalsePositiveOnPureNoise
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Watermark
+[ RUN      ] Watermark.NoFalsePositiveOnPureNoise
+[       OK ] Watermark.NoFalsePositiveOnPureNoise (6 ms)
+[----------] 1 test from Watermark (6 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"Watermark.NoFalsePositiveOnPureNoise" end time: Jul 21 18:17 CST
+"Watermark.NoFalsePositiveOnPureNoise" time elapsed: 00:00:00
+----------------------------------------------------------
+
+18/53 Testing: Watermark.SingleChirpRejected
+18/53 Test: Watermark.SingleChirpRejected
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Watermark.SingleChirpRejected" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Watermark.SingleChirpRejected" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Watermark.SingleChirpRejected
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Watermark
+[ RUN      ] Watermark.SingleChirpRejected
+[       OK ] Watermark.SingleChirpRejected (3 ms)
+[----------] 1 test from Watermark (3 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (3 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Watermark.SingleChirpRejected" end time: Jul 21 18:17 CST
+"Watermark.SingleChirpRejected" time elapsed: 00:00:00
+----------------------------------------------------------
+
+19/53 Testing: Watermark.DetectsAtBufferStart
+19/53 Test: Watermark.DetectsAtBufferStart
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Watermark.DetectsAtBufferStart" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Watermark.DetectsAtBufferStart" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Watermark.DetectsAtBufferStart
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Watermark
+[ RUN      ] Watermark.DetectsAtBufferStart
+[       OK ] Watermark.DetectsAtBufferStart (3 ms)
+[----------] 1 test from Watermark (3 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Watermark.DetectsAtBufferStart" end time: Jul 21 18:17 CST
+"Watermark.DetectsAtBufferStart" time elapsed: 00:00:00
+----------------------------------------------------------
+
+20/53 Testing: Watermark.SurvivesG711Distortion
+20/53 Test: Watermark.SurvivesG711Distortion
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Watermark.SurvivesG711Distortion" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Watermark.SurvivesG711Distortion" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Watermark.SurvivesG711Distortion
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Watermark
+[ RUN      ] Watermark.SurvivesG711Distortion
+[       OK ] Watermark.SurvivesG711Distortion (4 ms)
+[----------] 1 test from Watermark (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Watermark.SurvivesG711Distortion" end time: Jul 21 18:17 CST
+"Watermark.SurvivesG711Distortion" time elapsed: 00:00:00
+----------------------------------------------------------
+
+21/53 Testing: Align.ResampleLengthFollowsSkew
+21/53 Test: Align.ResampleLengthFollowsSkew
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Align.ResampleLengthFollowsSkew" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Align.ResampleLengthFollowsSkew" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Align.ResampleLengthFollowsSkew
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Align
+[ RUN      ] Align.ResampleLengthFollowsSkew
+[       OK ] Align.ResampleLengthFollowsSkew (0 ms)
+[----------] 1 test from Align (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Align.ResampleLengthFollowsSkew" end time: Jul 21 18:17 CST
+"Align.ResampleLengthFollowsSkew" time elapsed: 00:00:00
+----------------------------------------------------------
+
+22/53 Testing: Align.ResamplePreservesSine
+22/53 Test: Align.ResamplePreservesSine
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Align.ResamplePreservesSine" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Align.ResamplePreservesSine" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Align.ResamplePreservesSine
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Align
+[ RUN      ] Align.ResamplePreservesSine
+[       OK ] Align.ResamplePreservesSine (0 ms)
+[----------] 1 test from Align (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Align.ResamplePreservesSine" end time: Jul 21 18:17 CST
+"Align.ResamplePreservesSine" time elapsed: 00:00:00
+----------------------------------------------------------
+
+23/53 Testing: Align.DelayLineShiftsExactly
+23/53 Test: Align.DelayLineShiftsExactly
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Align.DelayLineShiftsExactly" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Align.DelayLineShiftsExactly" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Align.DelayLineShiftsExactly
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Align
+[ RUN      ] Align.DelayLineShiftsExactly
+[       OK ] Align.DelayLineShiftsExactly (0 ms)
+[----------] 1 test from Align (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Align.DelayLineShiftsExactly" end time: Jul 21 18:17 CST
+"Align.DelayLineShiftsExactly" time elapsed: 00:00:00
+----------------------------------------------------------
+
+24/53 Testing: CtxEvict.UnderLimitUnchanged
+24/53 Test: CtxEvict.UnderLimitUnchanged
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=CtxEvict.UnderLimitUnchanged" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"CtxEvict.UnderLimitUnchanged" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = CtxEvict.UnderLimitUnchanged
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CtxEvict
+[ RUN      ] CtxEvict.UnderLimitUnchanged
+[       OK ] CtxEvict.UnderLimitUnchanged (0 ms)
+[----------] 1 test from CtxEvict (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"CtxEvict.UnderLimitUnchanged" end time: Jul 21 18:17 CST
+"CtxEvict.UnderLimitUnchanged" time elapsed: 00:00:00
+----------------------------------------------------------
+
+25/53 Testing: CtxEvict.OverLimitDropsOldestToHalf
+25/53 Test: CtxEvict.OverLimitDropsOldestToHalf
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=CtxEvict.OverLimitDropsOldestToHalf" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"CtxEvict.OverLimitDropsOldestToHalf" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = CtxEvict.OverLimitDropsOldestToHalf
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CtxEvict
+[ RUN      ] CtxEvict.OverLimitDropsOldestToHalf
+[       OK ] CtxEvict.OverLimitDropsOldestToHalf (0 ms)
+[----------] 1 test from CtxEvict (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"CtxEvict.OverLimitDropsOldestToHalf" end time: Jul 21 18:17 CST
+"CtxEvict.OverLimitDropsOldestToHalf" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/53 Testing: CtxEvict.AlignsToLineBoundary
+26/53 Test: CtxEvict.AlignsToLineBoundary
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=CtxEvict.AlignsToLineBoundary" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"CtxEvict.AlignsToLineBoundary" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = CtxEvict.AlignsToLineBoundary
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CtxEvict
+[ RUN      ] CtxEvict.AlignsToLineBoundary
+[       OK ] CtxEvict.AlignsToLineBoundary (0 ms)
+[----------] 1 test from CtxEvict (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"CtxEvict.AlignsToLineBoundary" end time: Jul 21 18:17 CST
+"CtxEvict.AlignsToLineBoundary" time elapsed: 00:00:00
+----------------------------------------------------------
+
+27/53 Testing: CtxEvict.NoNewlineKeepsTail
+27/53 Test: CtxEvict.NoNewlineKeepsTail
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=CtxEvict.NoNewlineKeepsTail" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"CtxEvict.NoNewlineKeepsTail" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = CtxEvict.NoNewlineKeepsTail
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from CtxEvict
+[ RUN      ] CtxEvict.NoNewlineKeepsTail
+[       OK ] CtxEvict.NoNewlineKeepsTail (0 ms)
+[----------] 1 test from CtxEvict (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"CtxEvict.NoNewlineKeepsTail" end time: Jul 21 18:17 CST
+"CtxEvict.NoNewlineKeepsTail" time elapsed: 00:00:00
+----------------------------------------------------------
+
+28/53 Testing: Auth.BuiltinExtractsUid
+28/53 Test: Auth.BuiltinExtractsUid
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Auth.BuiltinExtractsUid" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Auth.BuiltinExtractsUid" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Auth.BuiltinExtractsUid
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Auth
+[ RUN      ] Auth.BuiltinExtractsUid
+[       OK ] Auth.BuiltinExtractsUid (0 ms)
+[----------] 1 test from Auth (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Auth.BuiltinExtractsUid" end time: Jul 21 18:17 CST
+"Auth.BuiltinExtractsUid" time elapsed: 00:00:00
+----------------------------------------------------------
+
+29/53 Testing: Auth.BuiltinRejectsBadFormat
+29/53 Test: Auth.BuiltinRejectsBadFormat
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Auth.BuiltinRejectsBadFormat" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Auth.BuiltinRejectsBadFormat" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Auth.BuiltinRejectsBadFormat
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Auth
+[ RUN      ] Auth.BuiltinRejectsBadFormat
+[       OK ] Auth.BuiltinRejectsBadFormat (0 ms)
+[----------] 1 test from Auth (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Auth.BuiltinRejectsBadFormat" end time: Jul 21 18:17 CST
+"Auth.BuiltinRejectsBadFormat" time elapsed: 00:00:00
+----------------------------------------------------------
+
+30/53 Testing: Auth.FailClosedOnWasmTrap
+30/53 Test: Auth.FailClosedOnWasmTrap
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Auth.FailClosedOnWasmTrap" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Auth.FailClosedOnWasmTrap" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Auth.FailClosedOnWasmTrap
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Auth
+[ RUN      ] Auth.FailClosedOnWasmTrap
+[       OK ] Auth.FailClosedOnWasmTrap (0 ms)
+[----------] 1 test from Auth (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Auth.FailClosedOnWasmTrap" end time: Jul 21 18:17 CST
+"Auth.FailClosedOnWasmTrap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+31/53 Testing: Auth.UidDerivesDeterministicSessionId
+31/53 Test: Auth.UidDerivesDeterministicSessionId
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Auth.UidDerivesDeterministicSessionId" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Auth.UidDerivesDeterministicSessionId" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Auth.UidDerivesDeterministicSessionId
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Auth
+[ RUN      ] Auth.UidDerivesDeterministicSessionId
+[       OK ] Auth.UidDerivesDeterministicSessionId (0 ms)
+[----------] 1 test from Auth (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Auth.UidDerivesDeterministicSessionId" end time: Jul 21 18:17 CST
+"Auth.UidDerivesDeterministicSessionId" time elapsed: 00:00:00
+----------------------------------------------------------
+
+32/53 Testing: Fixture.ConnectSendsWatermarkAndDropsFrames
+32/53 Test: Fixture.ConnectSendsWatermarkAndDropsFrames
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.ConnectSendsWatermarkAndDropsFrames" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.ConnectSendsWatermarkAndDropsFrames" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.ConnectSendsWatermarkAndDropsFrames
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.ConnectSendsWatermarkAndDropsFrames
+[       OK ] Fixture.ConnectSendsWatermarkAndDropsFrames (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.ConnectSendsWatermarkAndDropsFrames" end time: Jul 21 18:17 CST
+"Fixture.ConnectSendsWatermarkAndDropsFrames" time elapsed: 00:00:00
+----------------------------------------------------------
+
+33/53 Testing: Fixture.WmDetectedCompletesCalib
+33/53 Test: Fixture.WmDetectedCompletesCalib
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.WmDetectedCompletesCalib" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.WmDetectedCompletesCalib" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.WmDetectedCompletesCalib
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.WmDetectedCompletesCalib
+[       OK ] Fixture.WmDetectedCompletesCalib (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.WmDetectedCompletesCalib" end time: Jul 21 18:17 CST
+"Fixture.WmDetectedCompletesCalib" time elapsed: 00:00:00
+----------------------------------------------------------
+
+34/53 Testing: Fixture.QuickRespTriggersAfter5s
+34/53 Test: Fixture.QuickRespTriggersAfter5s
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.QuickRespTriggersAfter5s" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.QuickRespTriggersAfter5s" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.QuickRespTriggersAfter5s
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.QuickRespTriggersAfter5s
+[       OK ] Fixture.QuickRespTriggersAfter5s (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.QuickRespTriggersAfter5s" end time: Jul 21 18:17 CST
+"Fixture.QuickRespTriggersAfter5s" time elapsed: 00:00:00
+----------------------------------------------------------
+
+35/53 Testing: Fixture.QuickRespTriggersOnVadEnd
+35/53 Test: Fixture.QuickRespTriggersOnVadEnd
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.QuickRespTriggersOnVadEnd" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.QuickRespTriggersOnVadEnd" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.QuickRespTriggersOnVadEnd
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.QuickRespTriggersOnVadEnd
+[       OK ] Fixture.QuickRespTriggersOnVadEnd (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.QuickRespTriggersOnVadEnd" end time: Jul 21 18:17 CST
+"Fixture.QuickRespTriggersOnVadEnd" time elapsed: 00:00:00
+----------------------------------------------------------
+
+36/53 Testing: Fixture.QuickRespTriggersOnAsrEndpoint
+36/53 Test: Fixture.QuickRespTriggersOnAsrEndpoint
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.QuickRespTriggersOnAsrEndpoint" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.QuickRespTriggersOnAsrEndpoint" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.QuickRespTriggersOnAsrEndpoint
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.QuickRespTriggersOnAsrEndpoint
+[       OK ] Fixture.QuickRespTriggersOnAsrEndpoint (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.QuickRespTriggersOnAsrEndpoint" end time: Jul 21 18:17 CST
+"Fixture.QuickRespTriggersOnAsrEndpoint" time elapsed: 00:00:00
+----------------------------------------------------------
+
+37/53 Testing: Fixture.QuickRespSubmittedOnlyOnce
+37/53 Test: Fixture.QuickRespSubmittedOnlyOnce
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.QuickRespSubmittedOnlyOnce" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.QuickRespSubmittedOnlyOnce" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.QuickRespSubmittedOnlyOnce
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.QuickRespSubmittedOnlyOnce
+[       OK ] Fixture.QuickRespSubmittedOnlyOnce (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.QuickRespSubmittedOnlyOnce" end time: Jul 21 18:17 CST
+"Fixture.QuickRespSubmittedOnlyOnce" time elapsed: 00:00:00
+----------------------------------------------------------
+
+38/53 Testing: Fixture.AsrFinalSubmitsRestateAndAnswer
+38/53 Test: Fixture.AsrFinalSubmitsRestateAndAnswer
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.AsrFinalSubmitsRestateAndAnswer" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.AsrFinalSubmitsRestateAndAnswer" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.AsrFinalSubmitsRestateAndAnswer
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.AsrFinalSubmitsRestateAndAnswer
+[       OK ] Fixture.AsrFinalSubmitsRestateAndAnswer (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.AsrFinalSubmitsRestateAndAnswer" end time: Jul 21 18:17 CST
+"Fixture.AsrFinalSubmitsRestateAndAnswer" time elapsed: 00:00:00
+----------------------------------------------------------
+
+39/53 Testing: Fixture.LlmTextTriggersTtsPerClip
+39/53 Test: Fixture.LlmTextTriggersTtsPerClip
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.LlmTextTriggersTtsPerClip" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.LlmTextTriggersTtsPerClip" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.LlmTextTriggersTtsPerClip
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.LlmTextTriggersTtsPerClip
+[       OK ] Fixture.LlmTextTriggersTtsPerClip (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.LlmTextTriggersTtsPerClip" end time: Jul 21 18:17 CST
+"Fixture.LlmTextTriggersTtsPerClip" time elapsed: 00:00:00
+----------------------------------------------------------
+
+40/53 Testing: Fixture.PlaybackOrderSootheRestateAnswer
+40/53 Test: Fixture.PlaybackOrderSootheRestateAnswer
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.PlaybackOrderSootheRestateAnswer" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.PlaybackOrderSootheRestateAnswer" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.PlaybackOrderSootheRestateAnswer
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.PlaybackOrderSootheRestateAnswer
+[       OK ] Fixture.PlaybackOrderSootheRestateAnswer (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.PlaybackOrderSootheRestateAnswer" end time: Jul 21 18:17 CST
+"Fixture.PlaybackOrderSootheRestateAnswer" time elapsed: 00:00:00
+----------------------------------------------------------
+
+41/53 Testing: Fixture.RestateTimeoutGeneratesPlaceholder
+41/53 Test: Fixture.RestateTimeoutGeneratesPlaceholder
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.RestateTimeoutGeneratesPlaceholder" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.RestateTimeoutGeneratesPlaceholder" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.RestateTimeoutGeneratesPlaceholder
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.RestateTimeoutGeneratesPlaceholder
+[       OK ] Fixture.RestateTimeoutGeneratesPlaceholder (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.RestateTimeoutGeneratesPlaceholder" end time: Jul 21 18:17 CST
+"Fixture.RestateTimeoutGeneratesPlaceholder" time elapsed: 00:00:00
+----------------------------------------------------------
+
+42/53 Testing: Fixture.PlaceholderReusedWhenSootheNotReady
+42/53 Test: Fixture.PlaceholderReusedWhenSootheNotReady
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.PlaceholderReusedWhenSootheNotReady" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.PlaceholderReusedWhenSootheNotReady" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.PlaceholderReusedWhenSootheNotReady
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.PlaceholderReusedWhenSootheNotReady
+[       OK ] Fixture.PlaceholderReusedWhenSootheNotReady (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.PlaceholderReusedWhenSootheNotReady" end time: Jul 21 18:17 CST
+"Fixture.PlaceholderReusedWhenSootheNotReady" time elapsed: 00:00:00
+----------------------------------------------------------
+
+43/53 Testing: Fixture.StallsAfterMaxPlaceholderRounds
+43/53 Test: Fixture.StallsAfterMaxPlaceholderRounds
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.StallsAfterMaxPlaceholderRounds" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.StallsAfterMaxPlaceholderRounds" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.StallsAfterMaxPlaceholderRounds
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.StallsAfterMaxPlaceholderRounds
+[       OK ] Fixture.StallsAfterMaxPlaceholderRounds (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.StallsAfterMaxPlaceholderRounds" end time: Jul 21 18:17 CST
+"Fixture.StallsAfterMaxPlaceholderRounds" time elapsed: 00:00:00
+----------------------------------------------------------
+
+44/53 Testing: Fixture.GcAfter3MinOfflineCallsMemoryAndCleans
+44/53 Test: Fixture.GcAfter3MinOfflineCallsMemoryAndCleans
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.GcAfter3MinOfflineCallsMemoryAndCleans" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.GcAfter3MinOfflineCallsMemoryAndCleans" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.GcAfter3MinOfflineCallsMemoryAndCleans
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.GcAfter3MinOfflineCallsMemoryAndCleans
+[       OK ] Fixture.GcAfter3MinOfflineCallsMemoryAndCleans (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.GcAfter3MinOfflineCallsMemoryAndCleans" end time: Jul 21 18:17 CST
+"Fixture.GcAfter3MinOfflineCallsMemoryAndCleans" time elapsed: 00:00:00
+----------------------------------------------------------
+
+45/53 Testing: Fixture.ReconnectWithin3MinKeepsContextAndCalib
+45/53 Test: Fixture.ReconnectWithin3MinKeepsContextAndCalib
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.ReconnectWithin3MinKeepsContextAndCalib" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.ReconnectWithin3MinKeepsContextAndCalib" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.ReconnectWithin3MinKeepsContextAndCalib
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.ReconnectWithin3MinKeepsContextAndCalib
+[       OK ] Fixture.ReconnectWithin3MinKeepsContextAndCalib (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.ReconnectWithin3MinKeepsContextAndCalib" end time: Jul 21 18:17 CST
+"Fixture.ReconnectWithin3MinKeepsContextAndCalib" time elapsed: 00:00:00
+----------------------------------------------------------
+
+46/53 Testing: Fixture.OldGenerationMessageDiscarded
+46/53 Test: Fixture.OldGenerationMessageDiscarded
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.OldGenerationMessageDiscarded" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.OldGenerationMessageDiscarded" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.OldGenerationMessageDiscarded
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.OldGenerationMessageDiscarded
+[       OK ] Fixture.OldGenerationMessageDiscarded (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.OldGenerationMessageDiscarded" end time: Jul 21 18:17 CST
+"Fixture.OldGenerationMessageDiscarded" time elapsed: 00:00:00
+----------------------------------------------------------
+
+47/53 Testing: Fixture.CtxEvictedOver1MbAndSyncedToRedis
+47/53 Test: Fixture.CtxEvictedOver1MbAndSyncedToRedis
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.CtxEvictedOver1MbAndSyncedToRedis" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.CtxEvictedOver1MbAndSyncedToRedis" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.CtxEvictedOver1MbAndSyncedToRedis
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.CtxEvictedOver1MbAndSyncedToRedis
+[       OK ] Fixture.CtxEvictedOver1MbAndSyncedToRedis (1 ms)
+[----------] 1 test from Fixture (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.CtxEvictedOver1MbAndSyncedToRedis" end time: Jul 21 18:17 CST
+"Fixture.CtxEvictedOver1MbAndSyncedToRedis" time elapsed: 00:00:00
+----------------------------------------------------------
+
+48/53 Testing: Fixture.DeterministicReplay
+48/53 Test: Fixture.DeterministicReplay
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Fixture.DeterministicReplay" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Fixture.DeterministicReplay" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Fixture.DeterministicReplay
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Fixture
+[ RUN      ] Fixture.DeterministicReplay
+[       OK ] Fixture.DeterministicReplay (0 ms)
+[----------] 1 test from Fixture (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Fixture.DeterministicReplay" end time: Jul 21 18:17 CST
+"Fixture.DeterministicReplay" time elapsed: 00:00:00
+----------------------------------------------------------
+
+49/53 Testing: Wasm3Auth.AllowModuleAcceptsMagicToken
+49/53 Test: Wasm3Auth.AllowModuleAcceptsMagicToken
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Wasm3Auth.AllowModuleAcceptsMagicToken" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Wasm3Auth.AllowModuleAcceptsMagicToken" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Wasm3Auth.AllowModuleAcceptsMagicToken
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Wasm3Auth
+[ RUN      ] Wasm3Auth.AllowModuleAcceptsMagicToken
+[       OK ] Wasm3Auth.AllowModuleAcceptsMagicToken (4 ms)
+[----------] 1 test from Wasm3Auth (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Wasm3Auth.AllowModuleAcceptsMagicToken" end time: Jul 21 18:17 CST
+"Wasm3Auth.AllowModuleAcceptsMagicToken" time elapsed: 00:00:00
+----------------------------------------------------------
+
+50/53 Testing: Wasm3Auth.AllowModuleRejectsWrongToken
+50/53 Test: Wasm3Auth.AllowModuleRejectsWrongToken
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Wasm3Auth.AllowModuleRejectsWrongToken" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Wasm3Auth.AllowModuleRejectsWrongToken" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Wasm3Auth.AllowModuleRejectsWrongToken
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Wasm3Auth
+[ RUN      ] Wasm3Auth.AllowModuleRejectsWrongToken
+[       OK ] Wasm3Auth.AllowModuleRejectsWrongToken (4 ms)
+[----------] 1 test from Wasm3Auth (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"Wasm3Auth.AllowModuleRejectsWrongToken" end time: Jul 21 18:17 CST
+"Wasm3Auth.AllowModuleRejectsWrongToken" time elapsed: 00:00:00
+----------------------------------------------------------
+
+51/53 Testing: Wasm3Auth.TrapModuleFailsClosed
+51/53 Test: Wasm3Auth.TrapModuleFailsClosed
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Wasm3Auth.TrapModuleFailsClosed" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Wasm3Auth.TrapModuleFailsClosed" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Wasm3Auth.TrapModuleFailsClosed
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Wasm3Auth
+[ RUN      ] Wasm3Auth.TrapModuleFailsClosed
+[       OK ] Wasm3Auth.TrapModuleFailsClosed (4 ms)
+[----------] 1 test from Wasm3Auth (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Wasm3Auth.TrapModuleFailsClosed" end time: Jul 21 18:17 CST
+"Wasm3Auth.TrapModuleFailsClosed" time elapsed: 00:00:00
+----------------------------------------------------------
+
+52/53 Testing: Wasm3Auth.NullModuleFailsClosed
+52/53 Test: Wasm3Auth.NullModuleFailsClosed
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Wasm3Auth.NullModuleFailsClosed" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Wasm3Auth.NullModuleFailsClosed" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Wasm3Auth.NullModuleFailsClosed
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Wasm3Auth
+[ RUN      ] Wasm3Auth.NullModuleFailsClosed
+[       OK ] Wasm3Auth.NullModuleFailsClosed (0 ms)
+[----------] 1 test from Wasm3Auth (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Wasm3Auth.NullModuleFailsClosed" end time: Jul 21 18:17 CST
+"Wasm3Auth.NullModuleFailsClosed" time elapsed: 00:00:00
+----------------------------------------------------------
+
+53/53 Testing: Wasm3Manager.LoadReplaceAndMissingKeepsOld
+53/53 Test: Wasm3Manager.LoadReplaceAndMissingKeepsOld
+Command: "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests" "--gtest_filter=Wasm3Manager.LoadReplaceAndMissingKeepsOld" "--gtest_also_run_disabled_tests"
+Directory: /mnt/d/vit/mediator/build-wsl/tests
+"Wasm3Manager.LoadReplaceAndMissingKeepsOld" start time: Jul 21 18:17 CST
+Output:
+----------------------------------------------------------
+Running main() from /mnt/d/vit/mediator/build-wsl/_deps/googletest-src/googletest/src/gtest_main.cc
+Note: Google Test filter = Wasm3Manager.LoadReplaceAndMissingKeepsOld
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Wasm3Manager
+[ RUN      ] Wasm3Manager.LoadReplaceAndMissingKeepsOld
+[       OK ] Wasm3Manager.LoadReplaceAndMissingKeepsOld (7 ms)
+[----------] 1 test from Wasm3Manager (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"Wasm3Manager.LoadReplaceAndMissingKeepsOld" end time: Jul 21 18:17 CST
+"Wasm3Manager.LoadReplaceAndMissingKeepsOld" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Jul 21 18:17 CST

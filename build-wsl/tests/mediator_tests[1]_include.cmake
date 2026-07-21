@@ -1,0 +1,5 @@
+if(EXISTS "/mnt/d/vit/mediator/build-wsl/tests/mediator_tests[1]_tests.cmake")
+  include("/mnt/d/vit/mediator/build-wsl/tests/mediator_tests[1]_tests.cmake")
+else()
+  add_test(mediator_tests_NOT_BUILT mediator_tests_NOT_BUILT)
+endif()

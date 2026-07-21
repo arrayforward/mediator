@@ -33,6 +33,12 @@ void HeartbeatEngine::ProcessOne(const Message& m, ChangeSet& cs) {
         cs.grpc_calls.push_back(
             GrpcCall{"business", "control", m.session_id, clip::kNone, m.text});
         break;
+    case MsgType::kControlAck:
+        // 业务控制回执 → 文本帧回写端侧
+        cs.ws_sends.push_back(
+            WsOutbound{m.session_id, clip::kNone, true,
+                       {m.text.begin(), m.text.end()}});
+        break;
     default:
         break; // kAsrPartial/kTick*/kControlAck/kMemoryAck：本轮无心跳内动作
     }
@@ -55,7 +61,7 @@ void HeartbeatEngine::OnWsConnected(const Message& m, ChangeSet& cs) {
         s.m_wmPending = true;
         audio::WatermarkConfig wcfg;
         const auto pcm = audio::GenerateWatermark(wcfg);
-        cs.ws_sends.push_back(WsOutbound{m.session_id, audio::EncodeALaw(pcm)});
+        cs.ws_sends.push_back(WsOutbound{m.session_id, clip::kWatermark, false, audio::EncodeALaw(pcm)});
     }
     m_board.MarkChanged(m.session_id);
 }
@@ -202,7 +208,7 @@ void HeartbeatEngine::EvolvePlayback(SessionContext& s, int64_t now, ChangeSet& 
         auto& front = s.m_playQueue.front();
         if (front.audio_ready) {
             if (front.sent_bytes < front.g711.size()) {
-                WsOutbound out{s.m_sessionId,
+                WsOutbound out{s.m_sessionId, front.id, false,
                                {front.g711.begin() + static_cast<long>(front.sent_bytes),
                                 front.g711.end()}};
                 front.sent_bytes = front.g711.size();

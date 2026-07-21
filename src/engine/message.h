@@ -104,6 +104,8 @@ struct GrpcCall {
 
 struct WsOutbound {
     SessionId session_id{};
+    ClipId clip_id = clip::kNone; // 下行音频归属（水印/安抚/复述/答案/占位）
+    bool is_text = false;         // true=文本帧（控制ack等），false=二进制音频帧
     std::vector<uint8_t> bytes;
 };
 

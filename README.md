@@ -19,47 +19,57 @@
 
 ## 技术栈
 
-C++20 · Boost.Beast (WSS) · gRPC (异步 CQ) · WebRTC APM · hiredis · jwt-cpp · Wasmtime · opentelemetry-cpp · Google Breakpad · GoogleTest · CMake + vcpkg (WSL2/Ubuntu)
+C++20 · Boost.Beast (WSS/TLS) · gRPC · WebRTC APM（待接） · **wasm3**（third_party 内置） · spdlog · jwt-cpp（待接） · opentelemetry-cpp（待接） · Google Breakpad（待接） · GoogleTest · CMake (WSL2/Ubuntu 22.04 系统包)
 
 ## 构建与测试（WSL Ubuntu 22.04）
 
 ```bash
-sudo apt install -y build-essential cmake ninja-build pkg-config autoconf libtool
-git clone https://github.com/microsoft/vcpkg && ./vcpkg/bootstrap-vcpkg.sh
+sudo apt install -y build-essential cmake ninja-build pkg-config \
+  libgrpc++-dev protobuf-compiler-grpc libboost-dev libssl-dev libspdlog-dev wabt
 
-cmake -B build -GNinja -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
-cmake --build build
-ctest --test-dir build --output-on-failure        # 单元 + 心跳 + 会话测试
-cmake --build build --target symbols              # 抽调试符号入符号仓库
+cmake -B build-wsl -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build-wsl
+ctest --test-dir build-wsl --output-on-failure   # 52+ 单元测试（含 wasm 认证）
 ```
 
-端到端测试（mock 微服务 + 模拟端侧）：
+端到端测试（mock 五合一 gRPC + WSS 网关 + 模拟端侧，一条命令）：
 
 ```bash
-./build/tools/mock_services/mock_services &        # ASR/LLM/TTS/Business/Memory 五合一
-./build/mediator --auth-provider=builtin &
-./build/tools/e2e_client/e2e_client                # 全链路: wav→A/B/C→控制指令→断线重连
+bash scripts/run_e2e.sh
+# 场景1: 内置认证全链路（水印回环标定→安抚/复述/答案音频顺序下发→控制ack→断线重连）
+# 场景2: wasm 认证（错误 token 被拒 + wasm-ok 放行走全链路）
 ```
 
-wasm 认证扩展模式：
+手动运行：
 
 ```bash
-./build/mediator --auth-provider=wasm:e2e_auth     # 激活 wasm 认证扩展
+openssl req -x509 -newkey rsa:2048 -keyout s.key -out s.crt -days 1 -nodes -subj /CN=localhost
+./build-wsl/tools/mock_services 50051 &                        # ASR/LLM/TTS/Business/Memory 五合一
+./build-wsl/mediator --port=9443 --cert=s.crt --key=s.key \
+  --auth-provider=builtin &                                    # 或 wasm:build-wsl/tests/wasm/auth_allow.wasm
+./build-wsl/tools/e2e_client 9443 'h.{"uid":"user-1"}.sig'
 ```
 
 ## 工程结构
 
 ```
-proto/    gRPC 接口定义 (asr/llm/tts/business/memory)
+proto/    mediator.proto（ASR bidi / LLM / TTS / Business / Memory）
 src/
-  core/       Reactor/定时器/CSP Channel/虚拟时钟（框架层）
-  engine/     心跳引擎/数据黑板/单层演进/ChangeSet
-  net/        WSS 服务/JWT/gRPC 客户端/会话粘性
-  audio/      APM 封装/水印标定/对齐重采样/G.711A/播放队列
-  session/    会话上下文/在线注册/Redis/生命周期
-  ext/        wasm 总线/动态加载管理/观察者/wasm 认证
-  telemetry/  OTel 指标封装
-  crash/      Breakpad/符号化/watchdog
-tests/    GoogleTest 单元与心跳测试
-tools/    mock_services（五合一 mock）、e2e_client（端侧模拟器）
+  core/       时钟/CSP Channel/定时器/Reactor/线程池/spdlog 封装
+  engine/     消息契约/数据黑板/心跳引擎（RunOnce + 单层演进）
+  net/        WSS 服务器(Beast+OpenSSL)/gRPC 客户端/会话粘性
+  audio/      G.711A/双音水印标定/延迟与重采样对齐
+  session/    上下文淘汰(1MB→50%)
+  ext/        AuthProvider 可插拔认证 + wasm3 宿主(动态加载/WasmAuth)
+  gateway     装配器：心跳线程 + ChangeSet 执行器 + ASR 流管理
+tests/    52+ GoogleTest 用例 + wasm/*.wat 认证测试模块
+tools/    mock_services（五合一 mock gRPC）、e2e_client（WSS 模拟端侧）
+scripts/  run_e2e.sh（E2E 编排：内置认证 + wasm 认证双场景）
+third_party/wasm3/
 ```
+
+## 当前状态
+
+已落地并通过测试：四阶段心跳引擎、三段式音频流水线（安抚/复述/答案 + 场景化占位与复用）、WSS(JWT/wasm 双认证)、水印 AEC 标定回环验证、gRPC 五服务客户端、52+ 单元测试、双场景 E2E。
+
+待接入：WebRTC APM（AEC3 本体）、Redis 实体（hiredis）、OTel 指标导出、Breakpad 崩溃转储、jwt-cpp 真实验签（当前为结构解析 stub，禁止上线）、wasm 观察者消息扩展。

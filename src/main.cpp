@@ -1,32 +1,69 @@
 // ============================================================================
 // main.cpp — 进程入口
 //
-// 当前为框架装配骨架：创建时钟/引擎/Reactor，解析启动参数
-// （--auth-provider 等，见设计文档 §7.3.1）。
-// 网络层（Boost.Beast WSS / gRPC CQ / Redis / OTel / Breakpad）按 design.md
-// 接口逐个接入，接入前 main 仅演示心跳装配。
+// Linux/WSL：完整网关（WSS + gRPC + wasm 认证可选）。
+// Windows：仅框架冒烟（网络层依赖 Boost/gRPC，暂不构建）。
+//
+// 启动参数：
+//   --port=9443               WSS 监听端口
+//   --cert=server.crt         TLS 证书（PEM）
+//   --key=server.key          TLS 私钥（PEM）
+//   --backend=127.0.0.1:50051 后端 gRPC 地址（mock 五合一）
+//   --auth-provider=builtin | wasm:<path>   认证提供者（§7.3.1）
+//   --jwt-secret=xxx          内置验签密钥
+//   --log-level=info
 // ============================================================================
 #include <cstdio>
 #include <cstring>
 #include <string>
 
-#include "core/clock.h"
-#include "engine/heartbeat_engine.h"
-#include "ext/auth_provider.h"
+#if defined(__unix__) || defined(__linux__)
 
-int main(int argc, char** argv) {
-    mediator::EngineConfig cfg;
-    std::string auth_provider = "builtin";
+#include "core/log.h"
+#include "gateway.h"
+
+namespace {
+std::string ArgVal(int argc, char** argv, const std::string& key,
+                   const std::string& def) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        const std::string key = "--auth-provider=";
-        if (a.rfind(key, 0) == 0) auth_provider = a.substr(key.size());
+        if (a.rfind(key + "=", 0) == 0) return a.substr(key.size() + 1);
     }
-    std::printf("mediator gateway booting, auth-provider=%s gw_id=%s\n",
-                auth_provider.c_str(), cfg.gw_id.c_str());
+    return def;
+}
+} // namespace
 
-    mediator::SteadyClock clock;
-    mediator::HeartbeatEngine engine(cfg, clock);
-    std::printf("engine ready, inbound depth=%zu\n", engine.InboundDepth());
+int main(int argc, char** argv) {
+    mediator::GatewayConfig cfg;
+    cfg.ws_port = static_cast<uint16_t>(std::stoi(ArgVal(argc, argv, "--port", "9443")));
+    cfg.cert_file = ArgVal(argc, argv, "--cert", "server.crt");
+    cfg.key_file = ArgVal(argc, argv, "--key", "server.key");
+    cfg.backend_addr = ArgVal(argc, argv, "--backend", "127.0.0.1:50051");
+    cfg.auth_provider = ArgVal(argc, argv, "--auth-provider", "builtin");
+    cfg.jwt_secret = ArgVal(argc, argv, "--jwt-secret", "dev-secret");
+
+    mediator::Log::Init(ArgVal(argc, argv, "--log-level", "info"));
+    try {
+        mediator::Gateway gw(std::move(cfg));
+        gw.Run();
+    } catch (const std::exception& e) {
+        MDT_ERROR("gateway fatal: {}", e.what());
+        return 1;
+    }
     return 0;
 }
+
+#else // Windows：框架冒烟
+
+#include "core/clock.h"
+#include "engine/heartbeat_engine.h"
+
+int main() {
+    mediator::SteadyClock clock;
+    mediator::HeartbeatEngine engine(mediator::EngineConfig{}, clock);
+    std::printf("mediator core ready (windows smoke), inbound depth=%zu\n",
+                engine.InboundDepth());
+    return 0;
+}
+
+#endif

@@ -86,6 +86,18 @@ TEST(Watermark, SingleChirpRejected) {
     EXPECT_FALSE(DetectWatermark(cap, cfg).detected);
 }
 
+TEST(Watermark, DetectsAtBufferStart) {
+    // 回归：水印恰好在缓冲起点（WSS 回环标定的真实场景），峰值扫描必须覆盖 s=0
+    WatermarkConfig cfg;
+    const auto wm = GenerateWatermark(cfg);
+    const auto det = DetectWatermark(wm, cfg);
+    ASSERT_TRUE(det.detected);
+    EXPECT_EQ(det.p1, 0);
+    // G.711A 回环（编码→解码）后仍可检测
+    const auto loop = mediator::audio::DecodeALaw(mediator::audio::EncodeALaw(wm));
+    EXPECT_TRUE(DetectWatermark(loop, cfg).detected);
+}
+
 TEST(Watermark, SurvivesG711Distortion) {
     WatermarkConfig cfg;
     const auto wm = GenerateWatermark(cfg);
