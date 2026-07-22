@@ -66,6 +66,7 @@ public:
     void SendText(const SessionId& sid, const std::string& text);
     // 引擎事件通知（协议插件连接转换为下行帧；普通连接忽略）
     void NotifyThinking(const SessionId& sid);
+    void NotifyInterrupted(const SessionId& sid); // 打断：端侧丢播放缓冲
     void NotifyLlmText(const SessionId& sid, const std::string& text);
     size_t ConnectionCount() const;
 
@@ -76,6 +77,11 @@ private:
     void PluginSessionLoop(std::shared_ptr<Conn> conn, const std::string& plugin_path);
     void JwtSessionLoop(std::shared_ptr<Conn> conn);    // 现有 JWT 路径
     void CleanupConn(std::shared_ptr<Conn> conn);
+    // 出站队列：ssl_stream 不允许跨线程并发 sync read+write，
+    // 所有下行写入排队，由会话线程在读超时（20ms）轮转时落盘
+    void QueueOutbound(const std::shared_ptr<Conn>& conn, bool is_text,
+                       std::vector<uint8_t> bytes);
+    void DrainOutbound(const std::shared_ptr<Conn>& conn);
 
     uint16_t m_port;
     std::string m_certFile, m_keyFile;

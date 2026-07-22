@@ -21,7 +21,10 @@
 ;;   [104]       信封 seq 计数    [108] 音频帧 seq 计数    [112] itoa 缓冲(32B)
 ;;   [256,2048)  JSON/帧构造区
 ;;   [2048,...)  常量模板（NUL 结尾）
-;;   [8192,...)  宿主入站载荷      [12288,...) 重采样输出    [16384,...) 帧输出
+;;   [8192,...)  宿主入站载荷（16k clip 可达数百 KB）
+;;   [270336,...) 重采样输出（8k，入站一半）  [401408,...) 帧输出
+;;   三区不得重叠：早期 1 页内存（64KB）布局下，>57KB 的 clip 写不入
+;;   被静默丢弃，且帧构造区/重采样区互相踩内存（每 clip 损毁 ~173B）。
 ;; ============================================================================
 (module
   (import "env" "host_send_text"    (func $st (param i32 i32) (result i32)))
@@ -35,7 +38,7 @@
   (import "env" "host_feed_watermark" (func $wm (param i32 i32) (result i32)))
   (import "env" "host_now_ms"       (func $now (result i64)))
 
-  (memory (export "memory") 1)
+  (memory (export "memory") 8)
 
   ;; ---- 常量模板（NUL 结尾）----
   (data (i32.const 2048) "hello\00")
@@ -61,6 +64,7 @@
   (data (i32.const 2616) "\",\"server_time\":0,\"audio_config\":{\"frame_ms\":20,\"codec\":\"g711a\"}}\00")
   (data (i32.const 2700) "{\"text\":\"\00")
   (data (i32.const 2712) "\"}\00")
+  (data (i32.const 2720) "{\"status\":\"interrupted\"}\00")
 
   ;; ================= 基础工具 =================
 
@@ -237,7 +241,7 @@
     (local $ts i64)
     (local $out i32)
     (local $i i32)
-    (local.set $out (i32.const 16384))
+    (local.set $out (i32.const 401408))
     (local.set $seq (i32.load (i32.const 108)))
     (i32.store (i32.const 108) (i32.add (local.get $seq) (i32.const 1)))
     (local.set $ts (call $now))
@@ -336,7 +340,10 @@
         (if (i32.load8_u (i32.const 100))
           (then (drop (call $uasr (i32.const 6) (local.get $pl) (local.get $len)))))
         (return)))
-    ;; Cancel(0x13)：忽略
+    ;; Cancel(0x13)：端侧取消播放 → 注引擎 kAudioCancel(20)（打断语义）
+    (if (i32.eq (local.get $op) (i32.const 0x13))
+      (then (drop (call $inj (i32.const 20) (i32.const 0) (i32.const 0) (i32.const 0)))
+            (return)))
   )
 
   ;; 引擎下行 clip（16k G.711A）→ 8k → 0x11 + 0x10×N + 0x12
@@ -345,7 +352,7 @@
     (local $i i32)
     (local $c i32)
     (local.set $n (call $rs (local.get $ptr) (local.get $len)
-                            (i32.const 16000) (i32.const 8000) (i32.const 12288)))
+                            (i32.const 16000) (i32.const 8000) (i32.const 270336)))
     (if (i32.le_s (local.get $n) (i32.const 0)) (then return))
     (call $send_audio (i32.const 0x11) (i32.const 0) (i32.const 0))
     (block $done
@@ -355,7 +362,7 @@
         (if (i32.gt_s (local.get $c) (i32.const 160))
           (then (local.set $c (i32.const 160))))
         (call $send_audio (i32.const 0x10)
-                          (i32.add (i32.const 12288) (local.get $i)) (local.get $c))
+                          (i32.add (i32.const 270336) (local.get $i)) (local.get $c))
         (local.set $i (i32.add (local.get $i) (local.get $c)))
         (br $emit)))
     (call $send_audio (i32.const 0x12) (i32.const 0) (i32.const 0))
@@ -386,4 +393,9 @@
 
   (func (export "on_thinking")
     (call $send_env (i32.const 2184) (i32.const 2344) (call $slen (i32.const 2344))))
+
+  ;; 打断：先发 interrupted（端侧丢播放缓冲）再回 listening（继续收音）
+  (func (export "on_interrupted")
+    (call $send_env (i32.const 2184) (i32.const 2720) (call $slen (i32.const 2720)))
+    (call $send_env (i32.const 2184) (i32.const 2312) (call $slen (i32.const 2312))))
 )

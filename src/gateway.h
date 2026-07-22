@@ -68,7 +68,8 @@ private:
     void WriteToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
                     uint32_t flags);
     void Inject(MsgType type, const SessionId& sid, ClipId clip,
-                std::string text = {}, std::vector<uint8_t> payload = {});
+                std::string text = {}, std::vector<uint8_t> payload = {},
+                int64_t aux = 0, uint32_t flags = 0);
 
     GatewayConfig m_cfg;
     SteadyClock m_clock;
@@ -84,6 +85,14 @@ private:
     std::mutex m_asrMtx;
     std::unordered_map<std::string, std::unique_ptr<net::GrpcBackend::AsrStream>>
         m_asrStreams;
+
+    // 服务端 VAD 断句状态（端侧不发 End 帧时兜底：有声→持续静音 N 帧 → kVadEnd）
+    struct VadState {
+        bool in_speech = false;
+        int silence_frames = 0;
+    };
+    std::mutex m_vadMtx;
+    std::unordered_map<std::string, VadState> m_vad;
 
     // 音频异步管线：每会话一个 APM 实例（actor 模型，CPU 池调度）。
     // APM 与连接上下文绑定，会话 3 分钟超时 GC 时一并清除（session_gc 信号）

@@ -22,6 +22,11 @@
 
 namespace mediator {
 
+namespace {
+// 服务端 VAD 断句迟滞帧数：30 × 20ms ≈ 600ms 连续静音判为一句结束
+constexpr int kVadHangoverFrames = 30;
+} // namespace
+
 Gateway::Gateway(GatewayConfig cfg)
     : m_cfg(std::move(cfg)), m_engine(EngineConfig{}, m_clock) {
     // ---- 认证装配（fail-closed：wasm 加载失败拒绝启动）----
@@ -134,7 +139,8 @@ void Gateway::Stop() {
 }
 
 void Gateway::Inject(MsgType type, const SessionId& sid, ClipId clip,
-                     std::string text, std::vector<uint8_t> payload) {
+                      std::string text, std::vector<uint8_t> payload, int64_t aux,
+                      uint32_t flags) {
     Message m;
     m.type = type;
     m.session_id = sid;
@@ -142,6 +148,8 @@ void Gateway::Inject(MsgType type, const SessionId& sid, ClipId clip,
     m.clip_id = clip;
     m.text = std::move(text);
     m.payload = std::move(payload);
+    m.aux = aux;
+    m.flags = flags;
     // 协议插件事件通知（gRPC 回调路径同样触发：thinking / text 帧）
     if (m_ws) {
         if (type == MsgType::kAsrFinal) m_ws->NotifyThinking(sid);
@@ -151,8 +159,14 @@ void Gateway::Inject(MsgType type, const SessionId& sid, ClipId clip,
 }
 
 void Gateway::Dispatch(const ChangeSet& cs) {
-    for (const auto& b : cs.board_writes)
+    for (const auto& b : cs.board_writes) {
         if (b.field == "session_gc") CleanupSessionResources(b.session_id);
+        // 打断：通知端侧丢弃本地播放缓冲（协议插件转换为状态帧）
+        if (b.field == "interrupted" && m_ws) {
+            MDT_INFO("barge-in: notify interrupted");
+            m_ws->NotifyInterrupted(b.session_id);
+        }
+    }
     for (const auto& call : cs.grpc_calls)
         m_pool.Post([this, call] { ExecGrpcCall(call); });
     for (const auto& out : cs.ws_sends) {
@@ -216,11 +230,11 @@ void Gateway::ExecGrpcCall(const GrpcCall& call) {
                                                         call.session_id);
         if (text.empty()) return; // 超时路径由演进组件兜底
         if (call.method == "restate")
-            Inject(MsgType::kLlmRestate, call.session_id, call.clip_id, text);
+            Inject(MsgType::kLlmRestate, call.session_id, call.clip_id, text, {}, call.aux);
         else if (call.method == "answer")
-            Inject(MsgType::kLlmFinalAnswer, call.session_id, call.clip_id, text);
+            Inject(MsgType::kLlmFinalAnswer, call.session_id, call.clip_id, text, {}, call.aux);
         else // quick / quick_placeholder → 安抚或占位文本
-            Inject(MsgType::kLlmQuickResp, call.session_id, call.clip_id, text);
+            Inject(MsgType::kLlmQuickResp, call.session_id, call.clip_id, text, {}, call.aux);
     } else if (call.service == "tts") {
         const std::string pcm = m_backend->TtsSynth(call.request_bytes, call.clip_id,
                                                     call.session_id);
@@ -230,7 +244,7 @@ void Gateway::ExecGrpcCall(const GrpcCall& call) {
         // 下行 PCM 投渲染任务（会话 FIFO 保证先 reverse 后 capture）
         if (m_pipeline) m_pipeline->PostRender(call.session_id, samples);
         Inject(MsgType::kTtsAudioChunk, call.session_id, call.clip_id, {},
-               audio::EncodeALaw(samples));
+               audio::EncodeALaw(samples), call.aux);
     } else if (call.service == "business") {
         const std::string ack = m_backend->BusinessControl(call.request_bytes,
                                                            call.session_id);
@@ -244,8 +258,14 @@ void Gateway::ExecGrpcCall(const GrpcCall& call) {
 void Gateway::CleanupSessionResources(const SessionId& sid) {
     // 会话 3 分钟超时 GC：清除 APM 实例与 ASR 流（随上下文一并释放）
     if (m_pipeline) m_pipeline->RemoveSession(sid);
-    std::lock_guard<std::mutex> lk(m_asrMtx);
-    m_asrStreams.erase(net::SidHex(sid));
+    {
+        std::lock_guard<std::mutex> lk(m_asrMtx);
+        m_asrStreams.erase(net::SidHex(sid));
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_vadMtx);
+        m_vad.erase(net::SidHex(sid));
+    }
 }
 
 void Gateway::OnAudioToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
@@ -255,7 +275,31 @@ void Gateway::OnAudioToAsr(const SessionId& sid, const std::vector<int16_t>& pcm
         m_pipeline->PostCapture(sid, pcm, [this, sid, flags](const audio::ApmResult& res) {
             uint32_t f = flags;
             if (res.has_voice) f |= msgflag::kVoice; // APM VAD 与端侧 flags 取并集
+            // 服务端 VAD 断句：端侧协议可能不发 End（如 GoldieSettings App），
+            // 有声→连续静音 kVadHangover 帧 → kVadEnd|kAsrEndpoint 触发 ASR final
+            bool endpoint = false;
+            {
+                std::lock_guard<std::mutex> lk(m_vadMtx);
+                auto& st = m_vad[net::SidHex(sid)];
+                if (res.has_voice) {
+                    st.in_speech = true;
+                    st.silence_frames = 0;
+                } else if (st.in_speech && ++st.silence_frames >= kVadHangoverFrames) {
+                    st.in_speech = false;
+                    st.silence_frames = 0;
+                    endpoint = true;
+                }
+            }
             WriteToAsr(sid, res.pcm.empty() ? std::vector<int16_t>{} : res.pcm, f);
+            uint32_t vf = res.has_voice ? msgflag::kVoice : 0u;
+            if (endpoint) {
+                MDT_INFO("vad endpoint (server-side)");
+                WriteToAsr(sid, {}, f | msgflag::kVadEnd | msgflag::kAsrEndpoint);
+                vf |= msgflag::kVadEnd | msgflag::kAsrEndpoint;
+            }
+            // APM VAD 结果注引擎（打断检测/倾听状态机；端侧 flags 不可信，
+            // convai 插件每帧都标 kVoice）
+            Inject(MsgType::kVadUpdate, sid, clip::kNone, {}, {}, 0, vf);
         });
         return;
     }
@@ -275,6 +319,7 @@ void Gateway::WriteToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
                     MDT_DEBUG("asr partial: {}", text);
                 },
                 [this, sid](std::string text) { // final → 触发三段式流水线
+                    MDT_INFO("asr final: {}", text);
                     Inject(MsgType::kAsrFinal, sid, clip::kNone, std::move(text));
                 });
         }

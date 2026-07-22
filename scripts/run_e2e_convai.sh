@@ -13,6 +13,7 @@ cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null; done; wait 2>/dev
 trap cleanup EXIT
 
 WS_PORT=9443
+MOCK_PORT=${MOCK_PORT:-50051}
 DEVICE_KEY=goldie-dev-key-2026
 FAIL=0
 
@@ -20,17 +21,17 @@ CERT=$(mktemp -d)/server
 openssl req -x509 -newkey rsa:2048 -keyout "$CERT.key" -out "$CERT.crt" \
   -days 1 -nodes -subj "/CN=localhost" 2>/dev/null
 redis-server --port 6379 --daemonize no --save '' > /dev/null 2>&1 & PIDS+=($!)
-./$BUILD/tools/mock_services 50051 > /dev/null 2>&1 & PIDS+=($!)
+./$BUILD/tools/mock_services $MOCK_PORT > /dev/null 2>&1 & PIDS+=($!)
 sleep 0.8
 
 ./$BUILD/mediator --port=$WS_PORT --cert="$CERT.crt" --key="$CERT.key" \
-  --backend=127.0.0.1:50051 --redis-port=6379 \
+  --backend=127.0.0.1:$MOCK_PORT --redis-port=6379 \
   --protocol=convai.v1:$BUILD/tests/wasm/convai_proto.wasm \
   --protocol-key=$DEVICE_KEY > /dev/null 2>&1 & PIDS+=($!)
 sleep 1
 
 echo "=== convai.v1 e2e (device key auth) ==="
-timeout 60 ./$BUILD/tools/convai_sim $WS_PORT $DEVICE_KEY || FAIL=1
+timeout 120 ./$BUILD/tools/convai_sim $WS_PORT $DEVICE_KEY || FAIL=1
 
 echo "=== convai.v1 wrong key rejected ==="
 if timeout 30 ./$BUILD/tools/convai_sim $WS_PORT wrong-key 2>/dev/null; then

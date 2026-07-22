@@ -409,4 +409,162 @@ TEST_F(Fixture, DeterministicReplay) {
     EXPECT_EQ(r1.ws_sends.size(), r2.ws_sends.size());
 }
 
+// ---- 打断（barge-in）----
+
+TEST_F(Fixture, BargeInClearsQueueAndNotifiesInterrupted) {
+    ConnectAndCalibrate();
+    // 语句结束进入思考态，复述/答案在队列中
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_EQ(s->m_state, SessionState::kThinking);
+    ASSERT_EQ(s->m_playQueue.size(), 2u); // restate + answer
+    ASSERT_EQ(s->m_uttGen, 0u);
+
+    // 播放中用户说话：连续有声帧（APM VAD）达阈值 → 打断
+    ChangeSet cs;
+    for (int i = 0; i < 10; ++i) {
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    cs = engine.RunOnce();
+    EXPECT_TRUE(s->m_playQueue.empty());          // 播放队列清空
+    EXPECT_EQ(s->m_uttGen, 1u);                   // 代际 +1
+    EXPECT_EQ(s->m_state, SessionState::kListening); // 回到倾听
+    EXPECT_TRUE(s->m_uttActive);
+    bool notified = false;
+    for (const auto& b : cs.board_writes)
+        if (b.field == "interrupted") notified = true;
+    EXPECT_TRUE(notified);                        // 通知端侧丢缓冲
+    // 历史上下文保留（结合历史响应新语音）
+    EXPECT_NE(s->m_chatCtx.find("U:问题"), std::string::npos);
+}
+
+TEST_F(Fixture, BargeInRequiresSustainedVoice) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+
+    // 9 帧（低于阈值 10）不触发；中间夹静音帧重置计数
+    for (int i = 0; i < 9; ++i) {
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    EXPECT_EQ(s->m_playQueue.size(), 2u);
+    EXPECT_EQ(s->m_uttGen, 0u);
+    auto silence = Msg(MsgType::kVadUpdate, clock.NowMs()); // flags=0
+    engine.Inject(std::move(silence));
+    for (int i = 0; i < 9; ++i) {
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    EXPECT_EQ(s->m_uttGen, 0u); // 计数被静音重置，仍不触发
+}
+
+TEST_F(Fixture, StaleGenResultsDroppedAfterBargeIn) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+
+    // 打断：代际 0 → 1
+    for (int i = 0; i < 10; ++i) {
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_EQ(s->m_uttGen, 1u);
+
+    // 旧代际(aux=0)的 LLM 文本/TTS 音频迟到 → 丢弃
+    auto rb = Msg(MsgType::kLlmRestate, clock.NowMs()); // aux=0
+    rb.text = "旧复述";
+    engine.Inject(std::move(rb));
+    auto ta = Msg(MsgType::kTtsAudioChunk, clock.NowMs()); // aux=0
+    ta.clip_id = clip::kSoothe;
+    ta.payload = {9, 9};
+    engine.Inject(std::move(ta));
+    const auto cs = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs, "tts", "synth"), 0u); // 不为旧文本发起 TTS
+    EXPECT_TRUE(s->m_playQueue.empty());          // 旧音频不入队
+    EXPECT_TRUE(cs.ws_sends.empty());             // 不下发任何音频
+}
+
+TEST_F(Fixture, NewUtteranceAfterBargeInRunsPipeline) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题一";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    for (int i = 0; i < 10; ++i) { // 打断
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+
+    // 新语句：VAD 断句 → 安抚；Final → 复述+答案（均携带新代际 gen=1）
+    auto end = Msg(MsgType::kVadUpdate, clock.NowMs());
+    end.flags = msgflag::kVadEnd | msgflag::kAsrEndpoint;
+    engine.Inject(std::move(end));
+    auto cs1 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs1, "llm", "quick"), 1u);
+    auto fin2 = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin2.text = "问题二";
+    engine.Inject(std::move(fin2));
+    const auto cs2 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs2, "llm", "restate"), 1u);
+    EXPECT_EQ(CountGrpc(cs2, "llm", "answer"), 1u);
+    for (const auto& g : cs2.grpc_calls) EXPECT_EQ(g.aux, 1); // 新代际
+    // 新代际(aux=1)结果正常接收
+    auto rb = Msg(MsgType::kLlmRestate, clock.NowMs());
+    rb.text = "你问的是问题二";
+    rb.aux = 1;
+    engine.Inject(std::move(rb));
+    const auto cs3 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs3, "tts", "synth"), 1u);
+    // 历史包含两轮对话
+    const auto* s = engine.Board().FindSession(kSid);
+    EXPECT_NE(s->m_chatCtx.find("U:问题一"), std::string::npos);
+    EXPECT_NE(s->m_chatCtx.find("U:问题二"), std::string::npos);
+}
+
+TEST_F(Fixture, ClientCancelTriggersBargeIn) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_EQ(s->m_playQueue.size(), 2u);
+
+    auto cancel = Msg(MsgType::kAudioCancel, clock.NowMs());
+    engine.Inject(std::move(cancel));
+    const auto cs = engine.RunOnce();
+    EXPECT_TRUE(s->m_playQueue.empty());
+    EXPECT_EQ(s->m_uttGen, 1u);
+    bool notified = false;
+    for (const auto& b : cs.board_writes)
+        if (b.field == "interrupted") notified = true;
+    EXPECT_TRUE(notified);
+
+    // 空闲时取消：幂等无操作
+    auto cancel2 = Msg(MsgType::kAudioCancel, clock.NowMs());
+    engine.Inject(std::move(cancel2));
+    engine.RunOnce();
+    EXPECT_EQ(s->m_uttGen, 1u);
+}
+
 } // namespace

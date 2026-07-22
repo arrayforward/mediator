@@ -38,6 +38,7 @@ struct EngineConfig {
     int64_t c_timeout_ms = 15000;       // 音频C超时阈值
     int64_t session_gc_ms = 180000;     // 3分钟离线清理
     int max_placeholder_rounds = 2;     // 占位音频最大轮数
+    int barge_in_frames = 10;           // 播放中连续有声帧数触发打断（10×20ms=200ms）
     size_t max_ctx_bytes = 1u << 20;    // 1MB 上下文
     double ctx_target_ratio = 0.5;      // 淘汰至 50%
     std::string gw_id = "gw-local";
@@ -72,6 +73,9 @@ private:
     void OnLlmText(const Message& m, ChangeSet& cs);
     void OnTtsChunk(const Message& m, ChangeSet& cs);
     void OnWmDetected(const Message& m, ChangeSet& cs);
+    void OnVadUpdate(const Message& m, ChangeSet& cs);   // 服务端 VAD（含打断检测）
+    void OnAudioCancel(const Message& m, ChangeSet& cs); // 端侧取消 → 打断
+    void DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs);
 
     // 演进组件（单层：只处理 TakeChangedForEvolve 的快照）
     void EvolveQuickResp(SessionContext& s, int64_t now, ChangeSet& cs);

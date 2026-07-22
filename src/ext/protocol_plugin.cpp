@@ -178,7 +178,11 @@ void ProtocolPlugin::OnWsBinary(const uint8_t* data, size_t len) {
 }
 
 void ProtocolPlugin::OnOutboundClip(ClipId clip, const std::vector<uint8_t>& g711_16k) {
-    if (!m_mod || !WriteIn(g711_16k.data(), g711_16k.size())) return;
+    if (!m_mod) return;
+    if (!WriteIn(g711_16k.data(), g711_16k.size())) {
+        MDT_WARN("outbound clip dropped: {} bytes exceed wasm memory", g711_16k.size());
+        return;
+    }
     SetActiveThis();
     m_mod->CallExportI32("on_outbound_clip",
                          {std::to_string(clip), std::to_string(kInOffset),
@@ -203,6 +207,12 @@ void ProtocolPlugin::OnThinking() {
     if (!m_mod) return;
     SetActiveThis();
     m_mod->CallExportI32("on_thinking", {});
+}
+
+void ProtocolPlugin::OnInterrupted() {
+    if (!m_mod) return;
+    SetActiveThis();
+    m_mod->CallExportI32("on_interrupted", {});
 }
 
 // ---- 宿主原语实现 ----

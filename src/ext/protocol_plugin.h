@@ -70,6 +70,7 @@ public:
     void OnOutboundText(const std::string& text);
     void OnLlmText(const std::string& text);
     void OnThinking();
+    void OnInterrupted(); // 打断：端侧丢弃本地播放缓冲
 
     static constexpr uint32_t kInOffset = 8192;
     static constexpr uint32_t kConvertOffset = 12288;

@@ -29,6 +29,8 @@ void HeartbeatEngine::ProcessOne(const Message& m, ChangeSet& cs) {
     case MsgType::kLlmFinalAnswer: OnLlmText(m, cs); break;
     case MsgType::kTtsAudioChunk: OnTtsChunk(m, cs); break;
     case MsgType::kWmDetected: OnWmDetected(m, cs); break;
+    case MsgType::kVadUpdate: OnVadUpdate(m, cs); break;
+    case MsgType::kAudioCancel: OnAudioCancel(m, cs); break;
     case MsgType::kCtxRestored: {
         // Redis 恢复：断线重连后找回聊天上下文
         auto* s = m_board.FindSession(m.session_id);
@@ -133,14 +135,17 @@ void HeartbeatEngine::OnAsrFinal(const Message& m, ChangeSet& cs) {
     ClipBuffer c; c.id = clip::kAnswer; c.requested_ms = now;
     s.m_playQueue.push_back(std::move(b));
     s.m_playQueue.push_back(std::move(c));
-    cs.grpc_calls.push_back(GrpcCall{"llm", "restate", m.session_id, clip::kRestate, m.text});
-    cs.grpc_calls.push_back(GrpcCall{"llm", "answer", m.session_id, clip::kAnswer, m.text});
+    const int64_t gen = static_cast<int64_t>(s.m_uttGen);
+    cs.grpc_calls.push_back(GrpcCall{"llm", "restate", m.session_id, clip::kRestate, m.text, gen});
+    cs.grpc_calls.push_back(GrpcCall{"llm", "answer", m.session_id, clip::kAnswer, m.text, gen});
     m_board.MarkChanged(m.session_id);
 }
 
 void HeartbeatEngine::OnLlmText(const Message& m, ChangeSet& cs) {
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
+    // 打断后迟到的旧代际结果直接丢弃（防止已取消语句复活）
+    if (static_cast<uint64_t>(m.aux) != s->m_uttGen) return;
     ClipId id = clip::kNone;
     switch (m.type) {
     case MsgType::kLlmQuickResp: id = (m.clip_id == clip::kPlaceholder) ? clip::kPlaceholder : clip::kSoothe; break;
@@ -168,12 +173,15 @@ void HeartbeatEngine::OnLlmText(const Message& m, ChangeSet& cs) {
 
 void HeartbeatEngine::EmitTts(SessionContext& s, ClipId clip, const std::string& text,
                               ChangeSet& cs) {
-    cs.grpc_calls.push_back(GrpcCall{"tts", "synth", s.m_sessionId, clip, text});
+    cs.grpc_calls.push_back(GrpcCall{"tts", "synth", s.m_sessionId, clip, text,
+                                     static_cast<int64_t>(s.m_uttGen)});
 }
 
 void HeartbeatEngine::OnTtsChunk(const Message& m, ChangeSet& cs) {
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
+    // 打断后迟到的旧代际音频直接丢弃（防止已取消语句继续播放）
+    if (static_cast<uint64_t>(m.aux) != s->m_uttGen) return;
     auto* cl = FindClip(*s, m.clip_id);
     if (!cl) {
         ClipBuffer nb; nb.id = m.clip_id;
@@ -191,6 +199,60 @@ void HeartbeatEngine::OnTtsChunk(const Message& m, ChangeSet& cs) {
                                        24 * 3600});
     }
     m_board.MarkChanged(m.session_id);
+}
+
+// ---- 打断（barge-in）----
+// 播放/思考期间用户说话：清空播放队列、语句代际+1（迟到的旧 LLM/TTS 结果
+// 全部丢弃）、回到倾听态。聊天上下文 m_chatCtx 保留——新语句的复述/答案
+// 依然携带历史，保证"结合历史响应现在的语音"。
+void HeartbeatEngine::DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs) {
+    s.m_playQueue.clear();
+    ++s.m_uttGen;
+    s.m_placeholderRounds = 0;
+    s.m_quickRespSubmitted = false; // 新语句允许再次触发安抚
+    s.m_vadEndpoint = false;
+    s.m_uttActive = true;
+    s.m_uttStartMs = now;
+    s.m_state = SessionState::kListening;
+    cs.board_writes.push_back(BoardMutation{s.m_sessionId, "interrupted", "1"});
+    m_board.MarkChanged(s.m_sessionId);
+}
+
+void HeartbeatEngine::OnVadUpdate(const Message& m, ChangeSet& cs) {
+    auto* s = m_board.FindSession(m.session_id);
+    if (!s || s->m_state == SessionState::kOffline) return;
+    if (s->m_wmPending) return; // 标定期不识别
+    if (m.flags & msgflag::kVoice) {
+        ++s->m_voiceRun;
+        // 打断触发：思考/播放期间检测到持续语音（防单帧噪声误触）。
+        // 未达阈值前必须保持 kThinking——否则首帧就把状态翻成倾听，
+        // 打断窗口被自己关掉
+        if (s->m_voiceRun >= m_cfg.barge_in_frames &&
+            (s->m_state == SessionState::kThinking || !s->m_playQueue.empty())) {
+            DoBargeIn(*s, m.ts_ms, cs); // 内部置 kListening
+        } else if (s->m_state != SessionState::kThinking && s->m_playQueue.empty()) {
+            s->m_state = SessionState::kListening;
+        }
+        if (!s->m_uttActive) {
+            s->m_uttActive = true;
+            s->m_uttStartMs = m.ts_ms;
+            s->m_vadEndpoint = false;      // 新语句开始才重置断句标志
+            s->m_quickRespSubmitted = false;
+        }
+        s->m_lastVoiceMs = m.ts_ms;
+    } else {
+        s->m_voiceRun = 0;
+    }
+    if (m.flags & (msgflag::kVadEnd | msgflag::kAsrEndpoint)) s->m_vadEndpoint = true;
+    m_board.MarkChanged(m.session_id);
+}
+
+void HeartbeatEngine::OnAudioCancel(const Message& m, ChangeSet& cs) {
+    auto* s = m_board.FindSession(m.session_id);
+    if (!s) return;
+    // 端侧主动取消（如本地 VAD 打断）：与 barge-in 同语义，空闲时幂等无操作
+    if (s->m_state == SessionState::kThinking || !s->m_playQueue.empty())
+        DoBargeIn(*s, m.ts_ms, cs);
 }
 
 void HeartbeatEngine::OnWmDetected(const Message& m, ChangeSet& cs) {
@@ -228,7 +290,8 @@ void HeartbeatEngine::EvolveQuickResp(SessionContext& s, int64_t now, ChangeSet&
     if (s.m_state == SessionState::kOffline) return;
     s.m_quickRespSubmitted = true;
     cs.grpc_calls.push_back(
-        GrpcCall{"llm", "quick", s.m_sessionId, clip::kSoothe, s.m_chatCtx});
+        GrpcCall{"llm", "quick", s.m_sessionId, clip::kSoothe, s.m_chatCtx,
+                 static_cast<int64_t>(s.m_uttGen)});
 }
 
 void HeartbeatEngine::EvolvePlayback(SessionContext& s, int64_t now, ChangeSet& cs) {
@@ -282,7 +345,8 @@ void HeartbeatEngine::EvolvePlayback(SessionContext& s, int64_t now, ChangeSet& 
     ClipBuffer p; p.id = clip::kPlaceholder; p.requested_ms = 0;
     s.m_playQueue.push_front(std::move(p));
     cs.grpc_calls.push_back(GrpcCall{"llm", "quick_placeholder", s.m_sessionId,
-                                     clip::kPlaceholder, s.m_chatCtx});
+                                     clip::kPlaceholder, s.m_chatCtx,
+                                     static_cast<int64_t>(s.m_uttGen)});
 }
 
 void HeartbeatEngine::EnqueueReusePlaceholder(SessionContext& s, ChangeSet& cs) {

@@ -61,6 +61,8 @@ struct SessionContext {
     bool m_vadEndpoint = false;
     bool m_quickRespSubmitted = false;
     uint64_t m_droppedFramesWm = 0;
+    uint64_t m_uttGen = 0;   // 语句代际：打断(barge-in)时 +1，迟到 LLM/TTS 结果丢弃
+    int m_voiceRun = 0;      // 连续有声帧计数（APM VAD，打断触发依据）
 
     // AEC 标定（§6.5）
     struct AecCalib {

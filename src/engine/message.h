@@ -65,6 +65,8 @@ enum class MsgType : uint16_t {
     kTickRedisSync,
     kTickMetrics,
     kTickAecRecal,
+    kVadUpdate,            // 服务端 APM VAD 结果（flags: kVoice/kVadEnd/kAsrEndpoint）
+    kAudioCancel,          // 端侧取消播放（convai AudioOp 0x13 → 打断）
 };
 
 // 音频帧 flags
@@ -102,6 +104,7 @@ struct GrpcCall {
     SessionId session_id{};
     ClipId clip_id = clip::kNone;
     std::string request_bytes;
+    int64_t aux = 0;     // 语句代际号（打断后迟到的旧代际结果丢弃）
 };
 
 struct WsOutbound {

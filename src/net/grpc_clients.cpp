@@ -97,12 +97,11 @@ GrpcBackend::AsrStream::AsrStream(AsrService::Stub* stub, const SessionId& sid,
     m_stream = stub->StreamingRecognize(&m_ctx);
     m_reader = std::thread([this, op = std::move(on_partial), of = std::move(on_final)] {
         AsrResponse resp;
+        // 读完 final 必须继续读：多轮对话/打断复用同一条流，
+        // 提前退出会让后续 partial/final 无人接收（会话变"聋"）
         while (m_stream->Read(&resp)) {
-            if (resp.is_final()) {
-                of(resp.text());
-                return;
-            }
-            op(resp.text());
+            if (resp.is_final()) of(resp.text());
+            else op(resp.text());
         }
     });
 }

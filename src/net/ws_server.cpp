@@ -19,6 +19,11 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 
+#include <deque>
+
+#include <cerrno>
+#include <poll.h>
+
 #include "audio/align.h"
 #include "audio/g711.h"
 #include "core/clock.h"
@@ -35,8 +40,20 @@ namespace ws = beast::websocket;
 using tcp = asio::ip::tcp;
 
 struct WsServer::Conn {
-    std::shared_ptr<ws::stream<beast::ssl_stream<tcp::socket>>> stream;
-    std::mutex wmtx; // Beast 流写操作串行化
+    // 读循环用 poll(2) 等“可读或 20ms 超时”轮转出站队列（beast blocking I/O
+    // 不支持 expires_after，同步 read 一旦阻塞永不返回，队列会饿死）。
+    // 注意：ssl_stream 不允许跨线程并发 sync read+write（OpenSSL 对象非线程安全，
+    // 会在对端边发边收时把流搞坏，报 "unspecified system error"）——
+    // 因此所有出站写入都排队，只由会话线程 DrainOutbound 落盘。
+    using Stream = ws::stream<beast::ssl_stream<beast::tcp_stream>>;
+    std::shared_ptr<Stream> stream;
+    std::mutex wmtx; // 写操作串行化（会话线程 vs Stop()）
+    struct OutFrame {
+        bool is_text;
+        std::vector<uint8_t> bytes;
+    };
+    std::mutex omtx; // 出站队列（任意线程 → 会话线程）
+    std::deque<OutFrame> outq;
     std::string uid;
     SessionId sid{};
     uint64_t gen = 0;
@@ -46,10 +63,30 @@ struct WsServer::Conn {
     bool use_plugin = false;
     std::unique_ptr<ext::ProtocolPlugin> plugin;
     std::vector<int16_t> calib_buf8k; // 8k 协议侧标定缓冲
+    int64_t calib_start_ms = 0; // 首次喂标定缓冲的时间（超时兜底用）
 };
 
 namespace {
 SteadyClock g_clock; // 接入层时间戳（引擎内部仍用注入时钟）
+
+// 水印标定超时：超时未命中（无声学回放的设备，如模拟器）降级为 AEC 旁路，
+// 否则标定缓冲无限增长、O(n·m) 检测拖死会话读线程（ping 无 pong 被客户端踢掉）
+constexpr int64_t kWmCalibTimeoutMs = 15000;
+
+// 会话读循环 poll 轮转出站的等待时长（决定下行帧最坏额外时延）
+constexpr auto kReadPollTimeout = std::chrono::milliseconds(20);
+
+// 等“套接字可读或超时”：true=可读 / 出错需处理，false=超时。
+// 出错（含对端 RST 的 POLLERR/POLLHUP）也返回 true，交由后续 blocking read 报错统一处理。
+bool WaitReadable(tcp::socket::native_handle_type fd, int timeout_ms) {
+    pollfd pfd{fd, POLLIN, 0};
+    for (;;) {
+        const int r = ::poll(&pfd, 1, timeout_ms);
+        if (r == 0) return false;
+        if (r > 0) return true;
+        if (errno != EINTR) return true;
+    }
+}
 
 uint32_t ReadU32LE(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
@@ -102,16 +139,45 @@ void WsServer::AcceptLoop() {
         MDT_INFO("wss server listening on port {}", m_port);
         while (m_running) {
             auto conn = std::make_shared<Conn>();
-            tcp::socket sock(ioc);
+            beast::tcp_stream ts(ioc);
             boost::system::error_code ec;
-            acceptor->accept(sock, ec);
+            acceptor->accept(ts.socket(), ec);
             if (ec || !m_running) break;
-            conn->stream = std::make_shared<ws::stream<beast::ssl_stream<tcp::socket>>>(
-                beast::ssl_stream<tcp::socket>(std::move(sock), ssl_ctx));
+            conn->stream = std::make_shared<Conn::Stream>(
+                beast::ssl_stream<beast::tcp_stream>(std::move(ts), ssl_ctx));
             std::thread([this, conn] { SessionThread(conn); }).detach();
         }
     } catch (const std::exception& e) {
         MDT_ERROR("accept loop error: {}", e.what());
+    }
+}
+
+// 出站统一排队（任意线程调用）；只由会话线程 DrainOutbound 实际写入，
+// 避免跨线程并发 sync read+write 损坏 ssl_stream
+void WsServer::QueueOutbound(const std::shared_ptr<Conn>& conn, bool is_text,
+                             std::vector<uint8_t> bytes) {
+    std::lock_guard<std::mutex> lk(conn->omtx);
+    conn->outq.push_back({is_text, std::move(bytes)});
+}
+
+void WsServer::DrainOutbound(const std::shared_ptr<Conn>& conn) {
+    for (;;) {
+        Conn::OutFrame f;
+        {
+            std::lock_guard<std::mutex> lk(conn->omtx);
+            if (conn->outq.empty()) return;
+            f = std::move(conn->outq.front());
+            conn->outq.pop_front();
+        }
+        std::lock_guard<std::mutex> wlk(conn->wmtx);
+        boost::system::error_code ec;
+        if (f.is_text) conn->stream->text(true);
+        else conn->stream->binary(true);
+        conn->stream->write(asio::buffer(f.bytes), ec);
+        if (ec) {
+            MDT_DEBUG("ws outbound write failed: {}", ec.message());
+            return;
+        }
     }
 }
 
@@ -191,10 +257,22 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
         c.aux = static_cast<int64_t>(conn->gen);
         m_cb.inject(std::move(c));
 
-        // ---- 读循环 ----
+        // ---- 读循环（poll 等可读或 20ms 超时，轮转落盘出站队列）----
+        const auto fd = beast::get_lowest_layer(stream).socket().native_handle();
         for (;;) {
             buf.consume(buf.size());
-            stream.read(buf);
+            if (!WaitReadable(fd, static_cast<int>(kReadPollTimeout.count()))) {
+                DrainOutbound(conn);
+                continue;
+            }
+            boost::system::error_code ec;
+            stream.read(buf, ec);
+            if (ec) {
+                if (ec != ws::error::closed)
+                    MDT_DEBUG("ws session ended: {}", ec.message());
+                break;
+            }
+            DrainOutbound(conn);
             if (stream.got_text()) {
                 Message m;
                 m.type = MsgType::kWsControlCmd;
@@ -217,6 +295,14 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
                       g711.size());
             // 水印标定（仅未标定会话）
             if (!conn->calibrated) {
+                const int64_t now = g_clock.NowMs();
+                if (conn->calib_start_ms == 0) conn->calib_start_ms = now;
+                if (now - conn->calib_start_ms > kWmCalibTimeoutMs) {
+                    conn->calibrated = true; // 超时兜底：AEC 旁路
+                    conn->calib_buf.clear();
+                    conn->calib_buf.shrink_to_fit();
+                    MDT_WARN("aec calib timeout uid={} -> bypass aec", conn->uid);
+                } else {
                 conn->calib_buf.insert(conn->calib_buf.end(), pcm.begin(), pcm.end());
                 const auto det = audio::DetectWatermark(conn->calib_buf, m_wmCfg);
                 MDT_DEBUG("wm detect buf={} ncc={:.3f} detected={}",
@@ -232,6 +318,7 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
                     w.aux = det.p1;
                     w.dval = det.skew;
                     m_cb.inject(std::move(w));
+                }
                 }
             } else if ((flags & msgflag::kVoice) && m_cb.on_audio) {
                 m_cb.on_audio(conn->sid, pcm, flags); // 转发 ASR
@@ -260,18 +347,12 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
     conn->plugin = std::make_unique<ext::ProtocolPlugin>();
 
     ext::ProtocolPlugin::Hooks hooks;
-    hooks.send_text = [conn](const std::string& text) {
-        std::lock_guard<std::mutex> wlk(conn->wmtx);
-        boost::system::error_code ec;
-        conn->stream->text(true);
-        conn->stream->write(asio::buffer(text), ec);
+    hooks.send_text = [this, conn](const std::string& text) {
+        QueueOutbound(conn, true, {text.begin(), text.end()});
     };
-    hooks.send_binary = [conn](const std::vector<uint8_t>& payload) {
+    hooks.send_binary = [this, conn](const std::vector<uint8_t>& payload) {
         // 裸帧下发（协议头由插件自行构造）
-        std::lock_guard<std::mutex> wlk(conn->wmtx);
-        boost::system::error_code ec;
-        conn->stream->binary(true);
-        conn->stream->write(asio::buffer(payload), ec);
+        QueueOutbound(conn, false, payload);
     };
     hooks.inject = [this, conn](MsgType type, uint32_t flags, const std::string& text) {
         Message m;
@@ -309,6 +390,15 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
     };
     hooks.feed_watermark = [this, conn](const uint8_t* data, size_t len) -> bool {
         if (conn->calibrated) return true;
+        const int64_t now = g_clock.NowMs();
+        if (conn->calib_start_ms == 0) conn->calib_start_ms = now;
+        if (now - conn->calib_start_ms > kWmCalibTimeoutMs) {
+            conn->calibrated = true; // 超时兜底：无回声标定，AEC 旁路
+            conn->calib_buf8k.clear();
+            conn->calib_buf8k.shrink_to_fit();
+            MDT_WARN("aec calib timeout uid={} -> bypass aec", conn->uid);
+            return true;
+        }
         // 协议侧 8k 直接检测（模板匹配 16k chirp 降采样后的 0.5k~2k 频带），
         // 延迟按 8k 采样测得后 ×2 换算回内部 16k
         const auto pcm = audio::DecodeALaw(std::vector<uint8_t>(data, data + len));
@@ -334,7 +424,9 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
         f.type = MsgType::kWsAudioFrame;
         f.session_id = conn->sid;
         f.ts_ms = g_clock.NowMs();
-        f.flags = flags;
+        // 剥离 kVoice：convai 端侧无本地 VAD，插件每帧盲标 kVoice；
+        // 倾听/打断状态机以 kVadUpdate（APM VAD）为准，此处只保留断句位
+        f.flags = flags & ~msgflag::kVoice;
         f.aux = static_cast<int64_t>(conn->gen);
         m_cb.inject(std::move(f));
     };
@@ -348,12 +440,24 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
     }
     conn->plugin->SetConfigKey(m_protocolKey); // 配置槽注入（设备 Key 等）
 
-    // ---- 读循环：原始帧 → 插件（头部解析也在插件内）----
+    // ---- 读循环：原始帧 → 插件（头部解析也在插件内）；poll 轮转出站 ----
     try {
         beast::flat_buffer buf;
+        const auto fd = beast::get_lowest_layer(stream).socket().native_handle();
         for (;;) {
             buf.consume(buf.size());
-            stream.read(buf);
+            if (!WaitReadable(fd, static_cast<int>(kReadPollTimeout.count()))) {
+                DrainOutbound(conn);
+                continue;
+            }
+            boost::system::error_code ec;
+            stream.read(buf, ec);
+            if (ec) {
+                if (ec != ws::error::closed)
+                    MDT_DEBUG("plugin session ended: {}", ec.message());
+                break;
+            }
+            DrainOutbound(conn);
             if (stream.got_text()) {
                 conn->plugin->OnWsText(beast::buffers_to_string(buf.data()));
                 continue;
@@ -361,9 +465,6 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
             auto data = static_cast<const uint8_t*>(buf.data().data());
             conn->plugin->OnWsBinary(data, buf.size());
         }
-    } catch (const beast::system_error& e) {
-        if (e.code() != ws::error::closed)
-            MDT_DEBUG("plugin session ended: {}", e.code().message());
     } catch (const std::exception& e) {
         MDT_DEBUG("plugin session error: {}", e.what());
     }
@@ -407,11 +508,7 @@ void WsServer::SendBinary(const SessionId& sid, ClipId clip,
     std::vector<uint8_t> frame(4 + bytes.size());
     WriteU32LE(frame.data(), clip);
     std::memcpy(frame.data() + 4, bytes.data(), bytes.size());
-    std::lock_guard<std::mutex> wlk(conn->wmtx);
-    boost::system::error_code ec;
-    conn->stream->binary(true);
-    conn->stream->write(asio::buffer(frame), ec);
-    if (ec) MDT_DEBUG("ws send binary failed: {}", ec.message());
+    QueueOutbound(conn, false, std::move(frame));
 }
 
 void WsServer::SendText(const SessionId& sid, const std::string& text) {
@@ -427,10 +524,7 @@ void WsServer::SendText(const SessionId& sid, const std::string& text) {
         if (conn->plugin) conn->plugin->OnOutboundText(text);
         return;
     }
-    std::lock_guard<std::mutex> wlk(conn->wmtx);
-    boost::system::error_code ec;
-    conn->stream->text(true);
-    conn->stream->write(asio::buffer(text), ec);
+    QueueOutbound(conn, true, {text.begin(), text.end()});
 }
 
 void WsServer::NotifyThinking(const SessionId& sid) {
@@ -442,6 +536,17 @@ void WsServer::NotifyThinking(const SessionId& sid) {
         conn = it->second;
     }
     if (conn->use_plugin && conn->plugin) conn->plugin->OnThinking();
+}
+
+void WsServer::NotifyInterrupted(const SessionId& sid) {
+    std::shared_ptr<Conn> conn;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        auto it = m_conns.find(SidHex(sid));
+        if (it == m_conns.end()) return;
+        conn = it->second;
+    }
+    if (conn->use_plugin && conn->plugin) conn->plugin->OnInterrupted();
 }
 
 void WsServer::NotifyLlmText(const SessionId& sid, const std::string& text) {
