@@ -47,6 +47,9 @@ struct GatewayConfig {
     uint16_t metrics_port = 0;                    // /metrics 抓取端点，0=不启动
     std::string observers;                        // wasm 观察者：name:path,name:path
     bool enable_apm = true;                       // WebRTC APM（AECM/NS/VAD）
+    // 协议路由：subproto:plugin.wasm（可多个，逗号分隔；协议全部在插件内）
+    std::string protocol_routes;
+    std::string protocol_key; // 插件配置槽内容（如设备 Key）
 };
 
 class Gateway {

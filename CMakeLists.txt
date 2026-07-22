@@ -110,12 +110,15 @@ if(UNIX)
     DEPENDS ${OTLP_ROOT}/opentelemetry/proto/collector/metrics/v1/metrics_service.proto
     WORKING_DIRECTORY ${OTLP_ROOT})
 
+  find_package(nlohmann_json REQUIRED)
+
   add_library(mediator_net STATIC
     ${PROTO_GEN}/mediator.pb.cc
     ${PROTO_GEN}/mediator.grpc.pb.cc
     ${OTLP_GEN_FILES}
     src/net/grpc_clients.cpp
     src/net/ws_server.cpp
+    src/ext/protocol_plugin.cpp
     src/gateway.cpp
     src/audio/apm_wrapper.cpp
     src/audio/audio_pipeline.cpp
@@ -125,6 +128,7 @@ if(UNIX)
     src/telemetry/metrics_server.cpp
     src/crash/crash_handler.cpp
   )
+  target_link_libraries(mediator_net PUBLIC nlohmann_json::nlohmann_json)
   target_include_directories(mediator_net PUBLIC ${PROTO_GEN}
     ${GRPCPP_INCLUDE_DIRS} ${WEBRTC_APM_INCLUDE_DIRS} ${HIREDIS_INCLUDE_DIRS})
   target_compile_options(mediator_net PUBLIC ${WEBRTC_APM_CFLAGS_OTHER})

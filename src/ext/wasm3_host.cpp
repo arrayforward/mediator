@@ -32,15 +32,17 @@ bool Wasm3Module::Load(const std::vector<uint8_t>& bytes) {
         m_rt = nullptr;
         m_env = nullptr;
         m_authVerify = nullptr;
+        m_bytes.clear();
     }
     m_env = m3_NewEnvironment();
     if (!m_env) {
         m_lastError = "m3_NewEnvironment failed";
         return false;
     }
+    m_bytes = bytes; // wasm3 仅引用字节，宿主持有生命周期
     IM3Module mod = nullptr;
-    M3Result pr = m3_ParseModule(m_env, &mod, bytes.data(),
-                                 static_cast<uint32_t>(bytes.size()));
+    M3Result pr = m3_ParseModule(m_env, &mod, m_bytes.data(),
+                                 static_cast<uint32_t>(m_bytes.size()));
     if (pr) {
         m_lastError = std::string("parse: ") + pr;
         return false;
@@ -55,6 +57,7 @@ bool Wasm3Module::Load(const std::vector<uint8_t>& bytes) {
         m_lastError = std::string("load: ") + lr;
         return false;
     }
+    m_module = mod; // 供 LinkHostFunction 使用
     // 认证模块必须导出 auth_verify；查找失败仅记录（观察者类模块可无此导出）
     m3_FindFunction(&m_authVerify, m_rt, "auth_verify");
     return true;
@@ -97,7 +100,12 @@ int Wasm3Module::CallAuthVerify(const std::string& token) {
 bool Wasm3Module::HasFunction(const char* name) {
     if (!m_rt) return false;
     IM3Function fn = nullptr;
-    return m3_FindFunction(&fn, m_rt, name) == m3Err_none && fn != nullptr;
+    M3Result r = m3_FindFunction(&fn, m_rt, name);
+    if (r != m3Err_none || !fn) {
+        m_lastError = std::string("find ") + name + ": " + (r ? r : "null");
+        return false;
+    }
+    return true;
 }
 
 bool Wasm3Module::CallOnMessage(int32_t msg_type, const std::vector<uint8_t>& payload,
@@ -123,6 +131,58 @@ bool Wasm3Module::ReadMemory(uint32_t offset, void* out, size_t len) {
     if (!mem || offset + len > mem_size) return false;
     std::memcpy(out, mem + offset, len);
     return true;
+}
+
+bool Wasm3Module::LinkHostFunction(const char* name, const char* sig, const void* fn) {
+    if (!m_module) {
+        m_lastError = "no module loaded";
+        return false;
+    }
+    M3Result r = m3_LinkRawFunction(static_cast<IM3Module>(m_module), "env", name, sig,
+                                    reinterpret_cast<M3RawCall>(fn));
+    if (r && std::strcmp(r, m3Err_functionImportMissing) != 0) {
+        m_lastError = std::string("link ") + name + ": " + r;
+        return false;
+    }
+    return true;
+}
+
+bool Wasm3Module::WriteMemory(uint32_t offset, const void* data, size_t len) {
+    if (!m_rt) return false;
+    uint32_t mem_size = 0;
+    uint8_t* mem = m3_GetMemory(m_rt, &mem_size, 0);
+    if (!mem || offset + len > mem_size) return false;
+    std::memcpy(mem + offset, data, len);
+    return true;
+}
+
+bool Wasm3Module::CallExportI32(const char* name, const std::vector<std::string>& args,
+                                int32_t* result) {
+    if (!m_rt) return false;
+    IM3Function fn = nullptr;
+    if (m3_FindFunction(&fn, m_rt, name) != m3Err_none || !fn) {
+        m_lastError = std::string("export not found: ") + name;
+        return false;
+    }
+    std::vector<const char*> argv;
+    argv.reserve(args.size());
+    for (const auto& a : args) argv.push_back(a.c_str());
+    M3Result r = m3_CallArgv(fn, static_cast<uint32_t>(args.size()), argv.data());
+    if (r) {
+        m_lastError = std::string("call ") + name + ": " + r;
+        return false;
+    }
+    if (result) {
+        uint32_t v = 0;
+        const void* rets[] = {&v};
+        if (m3_GetResults(fn, 1, rets) == m3Err_none) *result = static_cast<int32_t>(v);
+    }
+    return true;
+}
+
+uint8_t* Wasm3Module::Memory(uint32_t* size_out) {
+    if (!m_rt) return nullptr;
+    return m3_GetMemory(m_rt, size_out, 0);
 }
 
 // ---- WasmModuleManager ----

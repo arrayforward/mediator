@@ -36,6 +36,7 @@
 #include "audio/watermark.h"
 #include "engine/message.h"
 #include "ext/auth_provider.h"
+#include "ext/protocol_plugin.h"
 
 namespace mediator::net {
 
@@ -54,19 +55,34 @@ public:
     void Start();
     void Stop();
 
+    // 协议路由：Sec-WebSocket-Protocol → wasm 插件路径（核心零协议，
+    // 协议解析全部在插件内，观察者模式）；key 为插件配置槽内容（如设备 Key）
+    void SetProtocolRoute(std::string subprotocol, std::string plugin_path) {
+        m_protocolRoutes[std::move(subprotocol)] = std::move(plugin_path);
+    }
+    void SetProtocolKey(std::string key) { m_protocolKey = std::move(key); }
+
     void SendBinary(const SessionId& sid, ClipId clip, const std::vector<uint8_t>& bytes);
     void SendText(const SessionId& sid, const std::string& text);
+    // 引擎事件通知（协议插件连接转换为下行帧；普通连接忽略）
+    void NotifyThinking(const SessionId& sid);
+    void NotifyLlmText(const SessionId& sid, const std::string& text);
     size_t ConnectionCount() const;
 
 private:
     struct Conn;
     void AcceptLoop();
     void SessionThread(std::shared_ptr<Conn> conn);
+    void PluginSessionLoop(std::shared_ptr<Conn> conn, const std::string& plugin_path);
+    void JwtSessionLoop(std::shared_ptr<Conn> conn);    // 现有 JWT 路径
+    void CleanupConn(std::shared_ptr<Conn> conn);
 
     uint16_t m_port;
     std::string m_certFile, m_keyFile;
     ext::AuthProvider* m_auth;
     WsCallbacks m_cb;
+    std::unordered_map<std::string, std::string> m_protocolRoutes; // 子协议→插件
+    std::string m_protocolKey; // 插件配置槽（设备 Key 等）
 
     std::thread m_acceptThread;
     std::atomic<bool> m_running{false};
@@ -77,6 +93,12 @@ private:
     std::unordered_map<std::string, uint64_t> m_genByUid;
 
     audio::WatermarkConfig m_wmCfg;
+    // 协议侧 8k 标定配置：降采样率不改变 Hz 频率，模板 chirp 与原 16k
+    // 一致（1k~4kHz）；延迟按 8k 采样测得后 ×2 换算回内部 16k
+    audio::WatermarkConfig m_wmCfg8k{
+        /*sample_rate*/ 8000, /*chirp_f0*/ 1000.0, /*chirp_f1*/ 4000.0,
+        /*chirp_ms*/ 20, /*gap_ms*/ 320, /*amplitude*/ 0.5,
+        /*ncc_threshold*/ 0.55, /*interval_tolerance_ms*/ 2};
 };
 
 } // namespace mediator::net

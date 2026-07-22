@@ -33,4 +33,13 @@ private:
     size_t m_pos = 0;
 };
 
+// 泛型 G.711A 重采样（协议无关）：解码 → 整数倍线性重采样 → 编码。
+// 支持 from/to 为 2:1 或 1:2（如 16k↔8k），其他比例走 ResampleLinear。
+std::vector<uint8_t> ResampleG711(const std::vector<uint8_t>& g711,
+                                  int from_rate, int to_rate);
+
+// G.711A 解码 + 重采样输出 PCM（上行用）
+std::vector<int16_t> G711ToPcmResampled(const uint8_t* g711, size_t len,
+                                        int from_rate, int to_rate);
+
 } // namespace mediator::audio

@@ -19,6 +19,7 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 
+#include "audio/align.h"
 #include "audio/g711.h"
 #include "core/clock.h"
 #include "core/log.h"
@@ -41,6 +42,10 @@ struct WsServer::Conn {
     uint64_t gen = 0;
     bool calibrated = false;
     std::vector<int16_t> calib_buf;
+    // 协议插件路径（协议解析由 wasm 插件完成，宿主零协议）
+    bool use_plugin = false;
+    std::unique_ptr<ext::ProtocolPlugin> plugin;
+    std::vector<int16_t> calib_buf8k; // 8k 协议侧标定缓冲
 };
 
 namespace {
@@ -113,10 +118,38 @@ void WsServer::AcceptLoop() {
 void WsServer::SessionThread(std::shared_ptr<Conn> conn) {
     auto& stream = *conn->stream;
     try {
-        // TLS + WS 握手
+        // TLS 握手 → 读 HTTP 升级请求 → 按 Sec-WebSocket-Protocol 分流
         stream.next_layer().handshake(asio::ssl::stream_base::server);
-        stream.accept();
+        beast::flat_buffer hbuf;
+        boost::beast::http::request<boost::beast::http::string_body> req;
+        boost::beast::http::read(stream.next_layer(), hbuf, req);
+        const std::string subproto{req[boost::beast::http::field::sec_websocket_protocol]};
+        const auto route = m_protocolRoutes.find(subproto);
+        if (route != m_protocolRoutes.end()) {
+            conn->use_plugin = true;
+            // 应答子协议（回显客户端请求的 subproto）
+            stream.set_option(ws::stream_base::decorator(
+                [subproto](ws::response_type& res) {
+                    res.set(boost::beast::http::field::sec_websocket_protocol, subproto);
+                }));
+            stream.accept(req);
+            PluginSessionLoop(conn, route->second);
+        } else {
+            stream.accept(req);
+            JwtSessionLoop(conn);
+        }
+    } catch (const beast::system_error& e) {
+        if (e.code() != ws::error::closed)
+            MDT_DEBUG("ws session ended: {}", e.code().message());
+    } catch (const std::exception& e) {
+        MDT_DEBUG("ws session error: {}", e.what());
+    }
+    CleanupConn(conn);
+}
 
+void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
+    auto& stream = *conn->stream;
+    try {
         // ---- 首帧认证 ----
         beast::flat_buffer buf;
         stream.read(buf);
@@ -218,7 +251,125 @@ void WsServer::SessionThread(std::shared_ptr<Conn> conn) {
     } catch (const std::exception& e) {
         MDT_DEBUG("ws session error: {}", e.what());
     }
-    // ---- 断连清理 ----
+}
+
+// ---- 协议插件会话循环：帧事件全部派发 wasm 插件（观察者模式，宿主零协议）----
+void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
+                               const std::string& plugin_path) {
+    auto& stream = *conn->stream;
+    conn->plugin = std::make_unique<ext::ProtocolPlugin>();
+
+    ext::ProtocolPlugin::Hooks hooks;
+    hooks.send_text = [conn](const std::string& text) {
+        std::lock_guard<std::mutex> wlk(conn->wmtx);
+        boost::system::error_code ec;
+        conn->stream->text(true);
+        conn->stream->write(asio::buffer(text), ec);
+    };
+    hooks.send_binary = [conn](const std::vector<uint8_t>& payload) {
+        // 裸帧下发（协议头由插件自行构造）
+        std::lock_guard<std::mutex> wlk(conn->wmtx);
+        boost::system::error_code ec;
+        conn->stream->binary(true);
+        conn->stream->write(asio::buffer(payload), ec);
+    };
+    hooks.inject = [this, conn](MsgType type, uint32_t flags, const std::string& text) {
+        Message m;
+        m.type = type;
+        m.session_id = conn->sid;
+        m.ts_ms = g_clock.NowMs();
+        m.flags = flags;
+        m.text = text;
+        m.aux = static_cast<int64_t>(conn->gen);
+        m_cb.inject(std::move(m));
+    };
+    hooks.bind_session = [this, conn](const std::string& uid) {
+        conn->uid = uid;
+        conn->sid = SessionIdFromUid(uid);
+        {
+            std::lock_guard<std::mutex> lk(m_mtx);
+            conn->gen = ++m_genByUid[uid];
+            m_conns[SidHex(conn->sid)] = conn;
+        }
+        MDT_INFO("plugin session connected uid={} gen={}", uid, conn->gen);
+        telemetry::Registry::Instance()
+            .MakeGauge("ws_connections_active", "", "active WSS connections")
+            .Set(static_cast<double>(ConnectionCount()));
+        Message c;
+        c.type = MsgType::kWsConnected;
+        c.session_id = conn->sid;
+        c.ts_ms = g_clock.NowMs();
+        c.text = uid;
+        c.aux = static_cast<int64_t>(conn->gen);
+        m_cb.inject(std::move(c));
+    };
+    hooks.close = [conn](uint16_t code) {
+        boost::system::error_code ec;
+        conn->stream->close(static_cast<ws::close_code>(code), ec);
+    };
+    hooks.feed_watermark = [this, conn](const uint8_t* data, size_t len) -> bool {
+        if (conn->calibrated) return true;
+        // 协议侧 8k 直接检测（模板匹配 16k chirp 降采样后的 0.5k~2k 频带），
+        // 延迟按 8k 采样测得后 ×2 换算回内部 16k
+        const auto pcm = audio::DecodeALaw(std::vector<uint8_t>(data, data + len));
+        conn->calib_buf8k.insert(conn->calib_buf8k.end(), pcm.begin(), pcm.end());
+        const auto det = audio::DetectWatermark(conn->calib_buf8k, m_wmCfg8k);
+        if (!det.detected) return false;
+        conn->calibrated = true;
+        MDT_INFO("aec calibrated uid={} delay8k={} skew={:.6f}", conn->uid,
+                 det.p1, det.skew);
+        Message w;
+        w.type = MsgType::kWmDetected;
+        w.session_id = conn->sid;
+        w.ts_ms = g_clock.NowMs();
+        w.aux = det.p1 * 2; // 8k 采样延迟 → 16k
+        w.dval = det.skew;
+        m_cb.inject(std::move(w));
+        return true;
+    };
+    hooks.forward_asr = [this, conn](const std::vector<int16_t>& pcm, uint32_t flags) {
+        if ((flags & msgflag::kVoice) && m_cb.on_audio)
+            m_cb.on_audio(conn->sid, pcm, flags);
+        Message f;
+        f.type = MsgType::kWsAudioFrame;
+        f.session_id = conn->sid;
+        f.ts_ms = g_clock.NowMs();
+        f.flags = flags;
+        f.aux = static_cast<int64_t>(conn->gen);
+        m_cb.inject(std::move(f));
+    };
+    hooks.is_calibrated = [conn] { return conn->calibrated; };
+
+    if (!conn->plugin->Load(plugin_path, std::move(hooks))) {
+        MDT_ERROR("protocol plugin load failed: {}", conn->plugin->LastError());
+        boost::system::error_code ec;
+        stream.close(ws::close_code::internal_error, ec);
+        return;
+    }
+    conn->plugin->SetConfigKey(m_protocolKey); // 配置槽注入（设备 Key 等）
+
+    // ---- 读循环：原始帧 → 插件（头部解析也在插件内）----
+    try {
+        beast::flat_buffer buf;
+        for (;;) {
+            buf.consume(buf.size());
+            stream.read(buf);
+            if (stream.got_text()) {
+                conn->plugin->OnWsText(beast::buffers_to_string(buf.data()));
+                continue;
+            }
+            auto data = static_cast<const uint8_t*>(buf.data().data());
+            conn->plugin->OnWsBinary(data, buf.size());
+        }
+    } catch (const beast::system_error& e) {
+        if (e.code() != ws::error::closed)
+            MDT_DEBUG("plugin session ended: {}", e.code().message());
+    } catch (const std::exception& e) {
+        MDT_DEBUG("plugin session error: {}", e.what());
+    }
+}
+
+void WsServer::CleanupConn(std::shared_ptr<Conn> conn) {
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         // 仅当当前登记的仍是本连接（没被重登踢掉）时移除
@@ -248,6 +399,11 @@ void WsServer::SendBinary(const SessionId& sid, ClipId clip,
         if (it == m_conns.end()) return;
         conn = it->second;
     }
+    // 协议插件连接：clip 包装由插件完成
+    if (conn->use_plugin) {
+        if (conn->plugin) conn->plugin->OnOutboundClip(clip, bytes);
+        return;
+    }
     std::vector<uint8_t> frame(4 + bytes.size());
     WriteU32LE(frame.data(), clip);
     std::memcpy(frame.data() + 4, bytes.data(), bytes.size());
@@ -266,10 +422,37 @@ void WsServer::SendText(const SessionId& sid, const std::string& text) {
         if (it == m_conns.end()) return;
         conn = it->second;
     }
+    // 协议插件连接：文本 outbound 经插件映射
+    if (conn->use_plugin) {
+        if (conn->plugin) conn->plugin->OnOutboundText(text);
+        return;
+    }
     std::lock_guard<std::mutex> wlk(conn->wmtx);
     boost::system::error_code ec;
     conn->stream->text(true);
     conn->stream->write(asio::buffer(text), ec);
+}
+
+void WsServer::NotifyThinking(const SessionId& sid) {
+    std::shared_ptr<Conn> conn;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        auto it = m_conns.find(SidHex(sid));
+        if (it == m_conns.end()) return;
+        conn = it->second;
+    }
+    if (conn->use_plugin && conn->plugin) conn->plugin->OnThinking();
+}
+
+void WsServer::NotifyLlmText(const SessionId& sid, const std::string& text) {
+    std::shared_ptr<Conn> conn;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        auto it = m_conns.find(SidHex(sid));
+        if (it == m_conns.end()) return;
+        conn = it->second;
+    }
+    if (conn->use_plugin && conn->plugin) conn->plugin->OnLlmText(text);
 }
 
 size_t WsServer::ConnectionCount() const {

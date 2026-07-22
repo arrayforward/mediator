@@ -11,7 +11,9 @@
 // ============================================================================
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
+#include <utility>
 
 #include <grpcpp/grpcpp.h>
 
@@ -80,17 +82,44 @@ public:
 
 class MockTts final : public TtsService::Service {
 public:
+    // 按 clip_id 生成可听辨的测试音型（联调方案：链路通畅的可听证明）
+    //   2 安抚：双音"叮-咚"      3 复述：do-mi-sol 上行三音
+    //   4 答案："滴-滴-滴—长滴"   5 占位：单音
     Status Synth(ServerContext*, const TtsRequest* req, TtsResponse* resp) override {
-        // 正弦 PCM16：每字 400 采样（25ms），0.4s ~ 3s
-        size_t n = req->text().size() * 400;
-        n = std::max<size_t>(6400, std::min<size_t>(n, 48000));
-        std::string pcm(n * 2, '\0');
-        auto* s = reinterpret_cast<int16_t*>(pcm.data());
-        for (size_t i = 0; i < n; ++i)
-            s[i] = static_cast<int16_t>(8000 * std::sin(2 * 3.14159265 * 440 * i / 16000));
+        std::string pcm;
+        switch (req->clip_id()) {
+        case 2: pcm = ToneSeq({{880, 150}, {660, 200}}); break;
+        case 3: pcm = ToneSeq({{523, 200}, {659, 200}, {784, 250}}); break;
+        case 4: pcm = ToneSeq({{1000, 120}, {0, 80}, {1000, 120}, {0, 80},
+                               {1000, 120}, {0, 120}, {1000, 600}});
+            break;
+        case 5: pcm = ToneSeq({{660, 300}}); break;
+        default: pcm = ToneSeq({{440, 400}}); break;
+        }
         resp->set_pcm(std::move(pcm));
-        MDT_INFO("mock tts clip={} samples={}", req->clip_id(), n);
+        MDT_INFO("mock tts clip={} bytes={}", req->clip_id(), resp->pcm().size());
         return Status::OK;
+    }
+
+private:
+    // {freq_hz(0=静音), ms} 序列 → PCM16 16kHz（10ms 淡入淡出防爆音）
+    static std::string ToneSeq(std::initializer_list<std::pair<double, int>> seq) {
+        std::string out;
+        for (const auto& [freq, ms] : seq) {
+            const int n = 16 * ms;
+            const size_t base = out.size() / 2;
+            out.resize(out.size() + n * 2);
+            auto* s = reinterpret_cast<int16_t*>(out.data()) + base;
+            for (int i = 0; i < n; ++i) {
+                double env = 1.0;
+                if (i < 160) env = i / 160.0;
+                if (i > n - 160) env = (n - i) / 160.0;
+                const double v = (freq > 0)
+                    ? 8000 * env * std::sin(2 * 3.14159265 * freq * i / 16000) : 0;
+                s[i] = static_cast<int16_t>(v);
+            }
+        }
+        return out;
     }
 };
 

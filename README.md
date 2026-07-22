@@ -70,7 +70,17 @@ third_party/wasm3/
 
 ## 当前状态
 
-全部模块已落地，**66 单元测试 + 6 类 E2E 场景全绿**（`bash scripts/run_e2e.sh`）：
+全部模块已落地，**75 单元测试 + 双协议 E2E 全绿**：
+
+- **convai.v1 联调路径（GoldieSettingsAndroid）**：协议全部在 wasm 插件内（核心代码零协议），`--protocol=convai.v1:plugin.wasm --protocol-key=<设备Key>` 配置路由；设备 Key 鉴权、水印声纹首次录音可闻（后续免重标）、8k↔16k 边界重采样、控制指令过 mock gRPC、`bash scripts/run_e2e_convai.sh` 全消息流断言
+- 四阶段心跳引擎 + 三段式音频流水线（安抚/复述/答案 + 场景化占位与复用）
+- WSS(TLS) + **JWT HS256 真实验签** + 调试后门 token（`--allow-debug-token`）
+- **wasm3** 认证扩展 + 观察者消息扩展 + **协议解析插件**（三类角色同一宿主机制）
+- **WebRTC APM**（AECM/NS/VAD，每会话 actor 管线）+ 双音水印标定（8k/16k 双模板）
+- **Redis**（hiredis）、**OTLP 指标推送** + **/metrics 抓取**、**崩溃转储 + 符号化**
+- 原 JWT 路径回归：`bash scripts/run_e2e.sh`（stress 5/5）
+
+偏差说明（AECM vs AEC3、Prometheus vs OTel SDK、自研转储 vs Breakpad）见 [docs/design.md](docs/design.md) §10A；convai 联调细节与联调缺陷记录见 §10B。
 
 - 四阶段心跳引擎 + 三段式音频流水线（安抚/复述/答案 + 场景化占位与复用）
 - WSS(TLS) + **JWT HS256 真实验签**（HMAC-SHA256+exp）+ 调试后门 token（`--allow-debug-token`，`debug:<uid>` 免签名，仅 E2E 调试用）
@@ -91,8 +101,11 @@ third_party/wasm3/
 --jwt-secret                   HS256 验签密钥
 --allow-debug-token=true       调试后门 token（生产严禁）
 --redis-host --redis-port      Redis 持久化
---metrics-port                 Prometheus /metrics 端点
+--otel-endpoint                OTel Collector（OTLP gRPC 推送）
+--metrics-port                 /metrics 抓取端点
 --observers=name:path,...      wasm 观察者订阅
+--protocol=subproto:plugin.wasm,...   协议路由（如 convai.v1:xxx.wasm）
+--protocol-key                 协议插件配置槽（如设备 Key）
 --crash-dir                    崩溃转储目录
 --enable-apm=false             关闭 WebRTC APM
 ```

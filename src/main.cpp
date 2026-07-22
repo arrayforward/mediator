@@ -50,6 +50,8 @@ int main(int argc, char** argv) {
     cfg.metrics_port = static_cast<uint16_t>(std::stoi(ArgVal(argc, argv, "--metrics-port", "0")));
     cfg.observers = ArgVal(argc, argv, "--observers", "");
     cfg.enable_apm = ArgVal(argc, argv, "--enable-apm", "true") == "true";
+    cfg.protocol_routes = ArgVal(argc, argv, "--protocol", "");
+    cfg.protocol_key = ArgVal(argc, argv, "--protocol-key", "");
 
     mediator::Log::Init(ArgVal(argc, argv, "--log-level", "info"));
 

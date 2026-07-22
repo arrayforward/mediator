@@ -78,6 +78,10 @@ Gateway::Gateway(GatewayConfig cfg)
             audio::ApmCalib calib{static_cast<int32_t>(m.aux), m.dval};
             m_pipeline->SetCalib(m.session_id, calib);
         }
+        // 协议插件事件通知
+        if (m.type == MsgType::kAsrFinal && m_ws) m_ws->NotifyThinking(m.session_id);
+        if (m.type == MsgType::kLlmRestate && m_ws)
+            m_ws->NotifyLlmText(m.session_id, m.text);
         m_wasmBus.Notify(m); // wasm 观察者（只读，trap 自动熔断）
         m_engine.Inject(std::move(m));
     };
@@ -91,6 +95,19 @@ Gateway::Gateway(GatewayConfig cfg)
 
     m_ws = std::make_unique<net::WsServer>(m_cfg.ws_port, m_cfg.cert_file,
                                            m_cfg.key_file, m_auth.get(), std::move(cb));
+    // 协议路由（wasm 插件，配置格式 subproto:path,subproto:path,...）
+    for (size_t pos = 0; pos < m_cfg.protocol_routes.size();) {
+        const auto comma = m_cfg.protocol_routes.find(',', pos);
+        const auto item = m_cfg.protocol_routes.substr(
+            pos, comma == std::string::npos ? std::string::npos : comma - pos);
+        pos = (comma == std::string::npos) ? m_cfg.protocol_routes.size() : comma + 1;
+        const auto colon = item.find(':');
+        if (colon != std::string::npos) {
+            m_ws->SetProtocolRoute(item.substr(0, colon), item.substr(colon + 1));
+            MDT_INFO("protocol route: {} -> {}", item.substr(0, colon), item.substr(colon + 1));
+        }
+    }
+    if (!m_cfg.protocol_key.empty()) m_ws->SetProtocolKey(m_cfg.protocol_key);
 }
 
 Gateway::~Gateway() { Stop(); }
@@ -125,6 +142,11 @@ void Gateway::Inject(MsgType type, const SessionId& sid, ClipId clip,
     m.clip_id = clip;
     m.text = std::move(text);
     m.payload = std::move(payload);
+    // 协议插件事件通知（gRPC 回调路径同样触发：thinking / text 帧）
+    if (m_ws) {
+        if (type == MsgType::kAsrFinal) m_ws->NotifyThinking(sid);
+        if (type == MsgType::kLlmRestate) m_ws->NotifyLlmText(sid, m.text);
+    }
     m_engine.Inject(std::move(m));
 }
 
@@ -258,7 +280,10 @@ void Gateway::WriteToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
         }
         stream = slot.get();
     }
-    if (!pcm.empty()) stream->Write(pcm, flags);
+    // 空载荷但带断句/端点标志（如 convai AudioOp.End）也必须写流——
+    // mock/真实 ASR 依赖 flags 触发 final
+    if (!pcm.empty() || (flags & (msgflag::kVadEnd | msgflag::kAsrEndpoint)))
+        stream->Write(pcm, flags);
 }
 
 } // namespace mediator

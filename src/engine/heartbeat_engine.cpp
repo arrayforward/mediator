@@ -109,6 +109,8 @@ void HeartbeatEngine::OnAudioFrame(const Message& m, ChangeSet& cs) {
         if (!s->m_uttActive) {
             s->m_uttActive = true;
             s->m_uttStartMs = m.ts_ms;
+            s->m_vadEndpoint = false;      // 新语句开始才重置断句标志
+            s->m_quickRespSubmitted = false; // 新一轮允许再次触发安抚
         }
         s->m_lastVoiceMs = m.ts_ms;
         s->m_state = SessionState::kListening;
@@ -121,7 +123,8 @@ void HeartbeatEngine::OnAsrFinal(const Message& m, ChangeSet& cs) {
     auto& s = m_board.GetOrCreateSession(m.session_id);
     s.m_state = SessionState::kThinking;
     s.m_uttActive = false;
-    s.m_vadEndpoint = false;
+    // 注意：不再清除 m_vadEndpoint —— VAD 帧与 Final 可能同心跳到达，
+    // QuickRespTrigger 依赖该标志在本心跳内触发安抚音频（竞态修复）
     // 上下文累积（Redis 持久化走 CtxEvict/同步路径）
     s.m_chatCtx += "U:" + m.text + "\n";
     // 并行：复述 B + 完整答案 C
@@ -217,9 +220,12 @@ void HeartbeatEngine::EvolveOnce(ChangeSet& cs) {
 }
 
 void HeartbeatEngine::EvolveQuickResp(SessionContext& s, int64_t now, ChangeSet& cs) {
-    if (!s.m_uttActive || s.m_quickRespSubmitted) return;
-    const bool long_utt = (now - s.m_uttStartMs) > m_cfg.utt_quick_ms;
+    if (s.m_quickRespSubmitted) return;
+    // VAD 帧与 ASR Final 可能同心跳到达（Final 会清 uttActive）——
+    // 断句标志本身即触发条件，不依赖 uttActive（竞态修复）
+    const bool long_utt = s.m_uttActive && (now - s.m_uttStartMs) > m_cfg.utt_quick_ms;
     if (!long_utt && !s.m_vadEndpoint) return;
+    if (s.m_state == SessionState::kOffline) return;
     s.m_quickRespSubmitted = true;
     cs.grpc_calls.push_back(
         GrpcCall{"llm", "quick", s.m_sessionId, clip::kSoothe, s.m_chatCtx});
