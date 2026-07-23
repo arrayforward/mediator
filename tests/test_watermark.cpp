@@ -108,3 +108,31 @@ TEST(Watermark, SurvivesG711Distortion) {
     ASSERT_TRUE(det.detected);
     EXPECT_NEAR(det.skew, 0.0, 2e-5);
 }
+
+TEST(Watermark, LongMultiPulseWithinHeadroom) {
+    WatermarkConfig cfg;
+    const auto wm = GenerateWatermark(cfg);
+    // 结构：chirp_count 个脉冲等间隔，总时长 = (count-1)*gap + 单声 ≈ 2.26s
+    const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
+    const int one = cfg.chirp_ms * cfg.sample_rate / 1000;
+    ASSERT_EQ(static_cast<int>(wm.size()), (cfg.chirp_count - 1) * gap + one);
+    EXPECT_GT(wm.size(), 2u * cfg.sample_rate);   // >2s：真机回环可采
+    EXPECT_LT(wm.size(), 3u * cfg.sample_rate);   // <3s：不拖慢会话建立
+    // 每个脉冲起点非零（等间隔结构成立）
+    for (int k = 0; k < cfg.chirp_count; ++k) {
+        int peak = 0;
+        for (int i = 0; i < one; ++i) peak = std::max(peak, std::abs(wm[k * gap + i]));
+        EXPECT_GT(peak, 20000) << "pulse " << k << " missing";
+    }
+    // 幅度：接近满幅但留 ~10% 余量，不削波
+    int peak = 0;
+    for (const auto s : wm) peak = std::max(peak, std::abs(static_cast<int>(s)));
+    EXPECT_GT(peak, 28000);
+    EXPECT_LT(peak, 32767);
+    // 直接检测 + G.711A 回环检测均成立（检测端兼容新结构）
+    EXPECT_TRUE(DetectWatermark(wm, cfg).detected);
+    const auto loop = mediator::audio::DecodeALaw(mediator::audio::EncodeALaw(wm));
+    const auto det = DetectWatermark(loop, cfg);
+    ASSERT_TRUE(det.detected);
+    EXPECT_EQ(det.p1, 0); // 返回首个匹配相邻对的左峰 = 第一个脉冲
+}

@@ -1,5 +1,6 @@
 #include "audio/watermark.h"
 
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 
@@ -27,12 +28,13 @@ std::vector<double> MakeChirp(const WatermarkConfig& cfg) {
 std::vector<int16_t> GenerateWatermark(const WatermarkConfig& cfg) {
     const auto chirp = MakeChirp(cfg);
     const int gap_samples = cfg.gap_ms * cfg.sample_rate / 1000; // 起点到起点
-    const int total = gap_samples + static_cast<int>(chirp.size());
+    const int count = std::max(cfg.chirp_count, 1);
+    const int total = (count - 1) * gap_samples + static_cast<int>(chirp.size());
     std::vector<int16_t> out(total, 0);
-    for (size_t i = 0; i < chirp.size(); ++i) {
-        out[i] = static_cast<int16_t>(chirp[i] * 32767.0);
-        out[gap_samples + i] = static_cast<int16_t>(chirp[i] * 32767.0);
-    }
+    // 多脉冲等间隔重复：检测端识别任意相邻双峰即可，冗余提高真机回环命中率
+    for (int k = 0; k < count; ++k)
+        for (size_t i = 0; i < chirp.size(); ++i)
+            out[k * gap_samples + i] = static_cast<int16_t>(chirp[i] * 32767.0);
     return out;
 }
 
