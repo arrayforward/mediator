@@ -318,6 +318,7 @@ TEST_F(Fixture, StallsAfterMaxPlaceholderRounds) {
 TEST_F(Fixture, GcAfter3MinOfflineCallsMemoryAndCleans) {
     ConnectAndCalibrate();
     auto d = Msg(MsgType::kWsDisconnected, clock.NowMs());
+    d.aux = 1; // 断连事件携带连接代际（ws_server CleanupConn 注入）
     engine.Inject(std::move(d));
     engine.RunOnce();
 
@@ -331,9 +332,11 @@ TEST_F(Fixture, GcAfter3MinOfflineCallsMemoryAndCleans) {
     EXPECT_EQ(engine.Board().FindSession(kSid), nullptr);
 }
 
-TEST_F(Fixture, ReconnectWithin3MinKeepsContextAndCalib) {
+TEST_F(Fixture, ReconnectKeepsContextAndRecalibratesAec) {
     ConnectAndCalibrate();
+    engine.Board().FindSession(kSid)->m_chatCtx = "U:历史\n";
     auto d = Msg(MsgType::kWsDisconnected, clock.NowMs());
+    d.aux = 1;
     engine.Inject(std::move(d));
     engine.RunOnce();
 
@@ -346,8 +349,56 @@ TEST_F(Fixture, ReconnectWithin3MinKeepsContextAndCalib) {
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_NE(s, nullptr);
     EXPECT_EQ(s->m_connGeneration, 2u);
-    EXPECT_TRUE(s->m_aecCalib.valid);   // 标定保留，免重标
-    EXPECT_TRUE(cs.ws_sends.empty());   // 不重发水印
+    EXPECT_EQ(s->m_chatCtx, "U:历史\n");       // 上下文保留（断线续聊）
+    EXPECT_FALSE(s->m_aecCalib.valid);         // 标定随连接失效，每连接重标
+    EXPECT_TRUE(s->m_wmPending);               // 重新进入标定期
+    ASSERT_EQ(cs.ws_sends.size(), 1u);         // 重发水印
+    EXPECT_EQ(cs.ws_sends[0].clip_id, clip::kWatermark);
+}
+
+// 标定中途断连：m_wmPending 不得锁存——重连必须重新下发水印
+// （修复前：wmPending 卡 true，后续所有连接不再发水印，AEC 永久旁路）
+TEST_F(Fixture, DisconnectDuringCalibThenReconnectResendsWatermark) {
+    auto c = Msg(MsgType::kWsConnected, clock.NowMs());
+    c.text = kUid; c.aux = 1;
+    engine.Inject(std::move(c));
+    engine.RunOnce(); // 下发水印，进入标定期（未完成标定）
+
+    auto d = Msg(MsgType::kWsDisconnected, clock.NowMs());
+    d.aux = 1;
+    engine.Inject(std::move(d));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_NE(s, nullptr);
+    EXPECT_FALSE(s->m_wmPending); // 断连复位锁存状态
+
+    auto c2 = Msg(MsgType::kWsConnected, clock.NowMs());
+    c2.text = kUid; c2.aux = 2;
+    engine.Inject(std::move(c2));
+    const auto cs = engine.RunOnce();
+    ASSERT_EQ(cs.ws_sends.size(), 1u); // 重连重新下发水印
+    EXPECT_EQ(cs.ws_sends[0].clip_id, clip::kWatermark);
+}
+
+// 连续重连竞态：旧连接的断连事件晚于新连接的建立到达 → 忽略，
+// 不误标离线、不清新连接的标定期
+TEST_F(Fixture, StaleDisconnectIgnoredAfterReconnect) {
+    ConnectAndCalibrate();
+    auto c2 = Msg(MsgType::kWsConnected, clock.NowMs());
+    c2.text = kUid; c2.aux = 2;
+    engine.Inject(std::move(c2));
+    engine.RunOnce(); // 新连接接管（gen=2），重发水印进入标定期
+
+    auto d = Msg(MsgType::kWsDisconnected, clock.NowMs());
+    d.aux = 1; // 旧 gen=1 连接的迟到断连
+    engine.Inject(std::move(d));
+    engine.RunOnce();
+
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_NE(s, nullptr);
+    EXPECT_NE(s->m_state, SessionState::kOffline);
+    EXPECT_TRUE(s->m_wmPending);
+    EXPECT_EQ(s->m_connGeneration, 2u);
 }
 
 TEST_F(Fixture, OldGenerationMessageDiscarded) {

@@ -71,6 +71,13 @@ void HeartbeatEngine::OnWsConnected(const Message& m, ChangeSet& cs) {
     auto& s = m_board.GetOrCreateSession(m.session_id);
     const uint64_t gen = static_cast<uint64_t>(m.aux);
     if (gen < s.m_connGeneration) return; // 旧代际消息丢弃
+    // 新物理连接接管会话：AEC 标定随连接失效——delay/skew 与设备声学
+    // 环境/摆放相关，每连接重新标定；同时解锁"标定中途断连"或"标定超时
+    // 旁路"遗留的 m_wmPending（否则锁存 true，后续连接永不重发水印）
+    if (gen > s.m_connGeneration) {
+        s.m_aecCalib = SessionContext::AecCalib{};
+        s.m_wmPending = false;
+    }
     s.m_connGeneration = gen;
     s.m_uid = m.text;
     s.m_state = SessionState::kIdle;
@@ -92,10 +99,18 @@ void HeartbeatEngine::OnWsConnected(const Message& m, ChangeSet& cs) {
 }
 
 void HeartbeatEngine::OnWsDisconnected(const Message& m, ChangeSet& cs) {
+    (void)cs;
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
+    // 旧代际连接的迟到断连（快速重连时新连接已接管会话）→ 忽略，
+    // 防误标离线、防误清新连接的标定状态
+    if (static_cast<uint64_t>(m.aux) < s->m_connGeneration) return;
     s->m_state = SessionState::kOffline;
     s->m_lastSeenMs = m.ts_ms;
+    // 标定随连接失效：复位 m_wmPending（含"标定中途断连"场景），
+    // 重连时由 OnWsConnected 重新下发水印完成每连接标定
+    s->m_aecCalib.valid = false;
+    s->m_wmPending = false;
     m_board.MarkChanged(m.session_id);
 }
 

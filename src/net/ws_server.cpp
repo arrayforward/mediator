@@ -483,6 +483,7 @@ void WsServer::CleanupConn(std::shared_ptr<Conn> conn) {
         d.type = MsgType::kWsDisconnected;
         d.session_id = conn->sid;
         d.ts_ms = g_clock.NowMs();
+        d.aux = static_cast<int64_t>(conn->gen); // 代际号：引擎据此忽略旧连接迟到的断连
         m_cb.inject(std::move(d));
         MDT_INFO("session disconnected uid={}", conn->uid);
         telemetry::Registry::Instance()

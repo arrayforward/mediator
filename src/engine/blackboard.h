@@ -13,9 +13,9 @@
 //   留待下一轮，防止连锁触发（ECA 单层原则）。
 //
 // SessionContext 关键状态：
-//   m_connGeneration  连接代际：重连 gen+1，旧 gen 消息直接丢弃（防污染）
-//   m_wmPending       水印标定期：上行语音帧直接丢弃，不识别
-//   m_aecCalib        AEC 对齐参数 {delay_samples, skew}（水印标定结果）
+//   m_connGeneration  连接代际：重连 gen+1，旧 gen 消息（含迟到的断连）直接丢弃
+//   m_wmPending       水印标定期：上行语音帧直接丢弃，不识别（随连接复位）
+//   m_aecCalib        AEC 对齐参数 {delay_samples, skew}（水印标定结果，随连接失效重标）
 //   m_playQueue       下行播放队列，严格按 水印/占位/安抚/复述/答案 顺序下发
 //   m_lastPlaceholder 上一次占位音频缓存（A 未就绪时复用，时延≈0）
 //   m_chatCtx         聊天上下文 ≤1MB，超限淘汰最早对话至 50%
