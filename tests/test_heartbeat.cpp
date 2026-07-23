@@ -54,6 +54,19 @@ struct Fixture : ::testing::Test {
         engine.Inject(std::move(f));
     }
 
+    // 持续语音打断：先越过回复保护窗（A 未开播时 2s 生效），再按 50ms
+    // 间隔发有声帧（满足 barge_in_frames 帧数 + barge_in_min_voice_ms
+    // 持续时长双条件；已开播场景保护窗本就不生效，推进时钟无害）
+    void BargeVoice(int frames = 10) {
+        clock.Advance(2100);
+        for (int i = 0; i < frames; ++i) {
+            clock.Advance(50);
+            auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+            v.flags = msgflag::kVoice;
+            engine.Inject(std::move(v));
+        }
+    }
+
     static size_t CountGrpc(const ChangeSet& cs, const std::string& svc,
                             const std::string& method) {
         size_t n = 0;
@@ -550,11 +563,7 @@ TEST_F(Fixture, StaleGenLlmFailedIgnored) {
     fin.text = "问题";
     engine.Inject(std::move(fin));
     engine.RunOnce();
-    for (int i = 0; i < 10; ++i) { // 打断：uttGen 0→1
-        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-        v.flags = msgflag::kVoice;
-        engine.Inject(std::move(v));
-    }
+    BargeVoice(); // 打断：uttGen 0→1
     engine.RunOnce();
     ASSERT_EQ(engine.Board().FindSession(kSid)->m_uttGen, 1u);
 
@@ -639,13 +648,9 @@ TEST_F(Fixture, BargeInClearsQueueAndNotifiesInterrupted) {
     ASSERT_EQ(s->m_playQueue.size(), 2u); // restate + answer
     ASSERT_EQ(s->m_uttGen, 0u);
 
-    // 播放中用户说话：连续有声帧（APM VAD）达阈值 → 打断
+    // 播放中用户说话：持续有声（帧数+时长双阈值）→ 打断
     ChangeSet cs;
-    for (int i = 0; i < 10; ++i) {
-        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-        v.flags = msgflag::kVoice;
-        engine.Inject(std::move(v));
-    }
+    BargeVoice();
     cs = engine.RunOnce();
     EXPECT_TRUE(s->m_playQueue.empty());          // 播放队列清空
     EXPECT_EQ(s->m_uttGen, 1u);                   // 代际 +1
@@ -667,8 +672,10 @@ TEST_F(Fixture, BargeInRequiresSustainedVoice) {
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
 
-    // 9 帧（低于阈值 10）不触发；中间夹静音帧重置计数
+    // 9 帧（低于阈值 10）不触发；中间夹静音帧重置计数与持续计时
+    clock.Advance(2100); // 越过回复保护窗（A 未开播）
     for (int i = 0; i < 9; ++i) {
+        clock.Advance(50);
         auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
         v.flags = msgflag::kVoice;
         engine.Inject(std::move(v));
@@ -679,12 +686,107 @@ TEST_F(Fixture, BargeInRequiresSustainedVoice) {
     auto silence = Msg(MsgType::kVadUpdate, clock.NowMs()); // flags=0
     engine.Inject(std::move(silence));
     for (int i = 0; i < 9; ++i) {
+        clock.Advance(50);
         auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
         v.flags = msgflag::kVoice;
         engine.Inject(std::move(v));
     }
     engine.RunOnce();
     EXPECT_EQ(s->m_uttGen, 0u); // 计数被静音重置，仍不触发
+}
+
+// 核心回归（真机 final 后 50ms 噪声秒杀回复）：final 复位连续有声计数
+// 与计时——用户自己的语音不得计入"打断自己回复"的判定
+TEST_F(Fixture, NoiseRightAfterFinalDoesNotCancelReply) {
+    ConnectAndCalibrate();
+    // 用户说话：持续有声，voiceRun 累积 ≥10
+    for (int i = 0; i < 12; ++i) {
+        clock.Advance(50);
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_EQ(s->m_state, SessionState::kThinking);
+    ASSERT_EQ(s->m_playQueue.size(), 2u);
+
+    // final 后 50ms 单帧噪声：voiceRun 已复位（=1<10 且持续 0ms<400ms），
+    // 且在回复保护窗内 → 回复不得被秒杀
+    clock.Advance(50);
+    auto n = Msg(MsgType::kVadUpdate, clock.NowMs());
+    n.flags = msgflag::kVoice;
+    engine.Inject(std::move(n));
+    engine.RunOnce();
+    EXPECT_EQ(s->m_uttGen, 0u);
+    EXPECT_EQ(s->m_playQueue.size(), 2u);
+    EXPECT_EQ(s->m_state, SessionState::kThinking);
+}
+
+// A 段保护窗：final 后 A 未开播的 2s 内，即使持续语音也不取消；
+// 保护窗过期后持续语音正常打断
+TEST_F(Fixture, ReplyProtectWindowThenNormalBargeIn) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+
+    // 保护窗内：20 帧 × 50ms = 950ms 持续（帧数/时长双阈值均满足，但 A 未开播）
+    for (int i = 0; i < 20; ++i) {
+        clock.Advance(50);
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    EXPECT_EQ(s->m_uttGen, 0u); // 保护窗内不取消
+    EXPECT_EQ(s->m_playQueue.size(), 2u);
+
+    // 越过保护窗（A 仍未开播）→ 持续语音正常打断
+    clock.Advance(1600); // 距 final 累计 >2s
+    for (int i = 0; i < 10; ++i) {
+        clock.Advance(50);
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    EXPECT_EQ(s->m_uttGen, 1u);
+    EXPECT_TRUE(s->m_playQueue.empty());
+}
+
+// A 开播即解除保护窗：回复开始播放后（<2s）持续语音正常打断
+TEST_F(Fixture, ReplyStartedUnlocksProtectWindow) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    // A 段文本+音频就绪 → EvolvePlayback 开播（m_replyStartedMs 设置）
+    auto t = Msg(MsgType::kLlmQuickResp, clock.NowMs());
+    t.clip_id = clip::kSoothe; t.text = "嗯"; t.aux = 0;
+    engine.Inject(std::move(t));
+    auto a = Msg(MsgType::kTtsAudioChunk, clock.NowMs());
+    a.clip_id = clip::kSoothe; a.payload = {1, 2, 3}; a.aux = 0;
+    engine.Inject(std::move(a));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_GT(s->m_replyStartedMs, 0);
+
+    for (int i = 0; i < 10; ++i) { // 持续 450ms，final 后 <2s 但已开播
+        clock.Advance(50);
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    EXPECT_EQ(s->m_uttGen, 1u);
 }
 
 TEST_F(Fixture, StaleGenResultsDroppedAfterBargeIn) {
@@ -695,11 +797,7 @@ TEST_F(Fixture, StaleGenResultsDroppedAfterBargeIn) {
     engine.RunOnce();
 
     // 打断：代际 0 → 1
-    for (int i = 0; i < 10; ++i) {
-        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-        v.flags = msgflag::kVoice;
-        engine.Inject(std::move(v));
-    }
+    BargeVoice();
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_EQ(s->m_uttGen, 1u);
@@ -724,11 +822,7 @@ TEST_F(Fixture, NewUtteranceAfterBargeInRunsPipeline) {
     fin.text = "问题一";
     engine.Inject(std::move(fin));
     engine.RunOnce();
-    for (int i = 0; i < 10; ++i) { // 打断
-        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-        v.flags = msgflag::kVoice;
-        engine.Inject(std::move(v));
-    }
+    BargeVoice(); // 打断
     engine.RunOnce();
 
     // 新语句：VAD 断句 → 安抚；Final → 复述+答案（均携带新代际 gen=1）

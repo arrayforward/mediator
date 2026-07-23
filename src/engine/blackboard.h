@@ -65,6 +65,9 @@ struct SessionContext {
     uint64_t m_droppedFramesWm = 0;
     uint64_t m_uttGen = 0;   // 语句代际：打断(barge-in)时 +1，迟到 LLM/TTS 结果丢弃
     int m_voiceRun = 0;      // 连续有声帧计数（APM VAD，打断触发依据）
+    int64_t m_voiceRunStartMs = 0; // 当前连续有声段起点（打断最短持续计时）
+    int64_t m_thinkingStartMs = 0; // 最近一次 AsrFinal 时刻（回复保护窗起点）
+    int64_t m_replyStartedMs = 0;  // 回复开播时刻（首个非占位 clip 下发；0=未开播）
 
     // AEC 标定（§6.5）
     struct AecCalib {

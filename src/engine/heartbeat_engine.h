@@ -40,6 +40,8 @@ struct EngineConfig {
     int64_t session_gc_ms = 180000;     // 3分钟离线清理
     int max_placeholder_rounds = 2;     // 占位音频最大轮数
     int barge_in_frames = 10;           // 播放中连续有声帧数触发打断（10×20ms=200ms）
+    int64_t barge_in_min_voice_ms = 400; // 打断要求的最短持续语音（0=退回仅帧数阈值）
+    int64_t reply_protect_ms = 2000;    // final 后回复启动保护窗：A 未开播前不打断（0=关闭）
     size_t max_ctx_bytes = 1u << 20;    // 1MB 上下文
     double ctx_target_ratio = 0.5;      // 淘汰至 50%
     std::string gw_id = "gw-local";

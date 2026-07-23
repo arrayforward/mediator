@@ -144,6 +144,13 @@ void HeartbeatEngine::OnAsrFinal(const Message& m, ChangeSet& cs) {
     auto& s = m_board.GetOrCreateSession(m.session_id);
     s.m_state = SessionState::kThinking;
     s.m_uttActive = false;
+    // 回复新一轮：复位连续有声计数/计时——用户自己的语音不得计入
+    // "打断自己回复"的判定（真机 final 后 50ms 噪声秒杀回复的根因）；
+    // 记录保护窗起点并清开播标记（A 未开播前的保护窗内不取消）
+    s.m_voiceRun = 0;
+    s.m_voiceRunStartMs = 0;
+    s.m_thinkingStartMs = m.ts_ms;
+    s.m_replyStartedMs = 0;
     // 注意：不再清除 m_vadEndpoint —— VAD 帧与 Final 可能同心跳到达，
     // QuickRespTrigger 依赖该标志在本心跳内触发安抚音频（竞态修复）
     // 上下文累积（Redis 持久化走 CtxEvict/同步路径）
@@ -279,6 +286,8 @@ void HeartbeatEngine::DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs) {
     s.m_aFallbackDone = false;      // 新语句允许再次失败兜底
     s.m_degradedSent = false;
     s.m_vadEndpoint = false;
+    s.m_voiceRun = 0;          // 打断后重新累计持续语音（防连锁打断）
+    s.m_voiceRunStartMs = 0;
     s.m_uttActive = true;
     s.m_uttStartMs = now;
     s.m_state = SessionState::kListening;
@@ -292,10 +301,23 @@ void HeartbeatEngine::OnVadUpdate(const Message& m, ChangeSet& cs) {
     if (s->m_wmPending) return; // 标定期不识别
     if (m.flags & msgflag::kVoice) {
         ++s->m_voiceRun;
-        // 打断触发：思考/播放期间检测到持续语音（防单帧噪声误触）。
+        if (s->m_voiceRun == 1) s->m_voiceRunStartMs = m.ts_ms; // 连续有声段起点
+        // 打断触发三条件（防误触秒杀回复）：
+        //  1. 连续有声帧数 ≥ barge_in_frames（原有）；
+        //  2. 持续时长 ≥ barge_in_min_voice_ms（0=不启用）——短促噪声/残差只
+        //     记录不取消；真打断语音必然持续，400ms 延迟可接受；
+        //  3. 不在回复启动保护窗内（final 后 A 未开播的 reply_protect_ms 内
+        //     不取消，让回复至少能开播；A 开播或超时后正常）。
         // 未达阈值前必须保持 kThinking——否则首帧就把状态翻成倾听，
         // 打断窗口被自己关掉
-        if (s->m_voiceRun >= m_cfg.barge_in_frames &&
+        const bool sustained =
+            m_cfg.barge_in_min_voice_ms <= 0 ||
+            (m.ts_ms - s->m_voiceRunStartMs) >= m_cfg.barge_in_min_voice_ms;
+        const bool reply_protected =
+            m_cfg.reply_protect_ms > 0 && s->m_replyStartedMs == 0 &&
+            s->m_thinkingStartMs > 0 &&
+            (m.ts_ms - s->m_thinkingStartMs) < m_cfg.reply_protect_ms;
+        if (s->m_voiceRun >= m_cfg.barge_in_frames && sustained && !reply_protected &&
             (s->m_state == SessionState::kThinking || !s->m_playQueue.empty())) {
             DoBargeIn(*s, m.ts_ms, cs); // 内部置 kListening
         } else if (s->m_state != SessionState::kThinking && s->m_playQueue.empty()) {
@@ -312,6 +334,7 @@ void HeartbeatEngine::OnVadUpdate(const Message& m, ChangeSet& cs) {
         s->m_lastVoiceMs = m.ts_ms;
     } else {
         s->m_voiceRun = 0;
+        s->m_voiceRunStartMs = 0; // 静音中断：持续计时一并复位
     }
     if (m.flags & (msgflag::kVadEnd | msgflag::kAsrEndpoint)) s->m_vadEndpoint = true;
     m_board.MarkChanged(m.session_id);
@@ -382,6 +405,9 @@ void HeartbeatEngine::EvolvePlayback(SessionContext& s, int64_t now, ChangeSet& 
         auto& front = s.m_playQueue.front();
         if (front.audio_ready) {
             if (front.sent_bytes < front.g711.size()) {
+                // 回复开播标记：首个非占位 clip 下发即解除 A 段保护窗
+                if (front.id != clip::kPlaceholder && s.m_replyStartedMs == 0)
+                    s.m_replyStartedMs = now;
                 WsOutbound out{s.m_sessionId, front.id, false,
                                {front.g711.begin() + static_cast<long>(front.sent_bytes),
                                 front.g711.end()}};
