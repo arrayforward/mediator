@@ -71,8 +71,10 @@ namespace {
 SteadyClock g_clock; // 接入层时间戳（引擎内部仍用注入时钟）
 
 // 水印标定超时：超时未命中（无声学回放的设备，如模拟器）降级为 AEC 旁路，
-// 否则标定缓冲无限增长、O(n·m) 检测拖死会话读线程（ping 无 pong 被客户端踢掉）
-constexpr int64_t kWmCalibTimeoutMs = 15000;
+// 否则标定缓冲无限增长、O(n·m) 检测拖死会话读线程（ping 无 pong 被客户端踢掉）。
+// 6s ≈ 水印时长(0.98s) 6 倍：覆盖 4 脉冲播放 + 真机回环延迟 + 抖动余量；
+// 超时走 kAecBypass 直通（引擎丢帧门已解锁），用户最多等 6 秒
+constexpr int64_t kWmCalibTimeoutMs = 6000;
 
 // 会话读循环 poll 轮转出站的等待时长（决定下行帧最坏额外时延）
 constexpr auto kReadPollTimeout = std::chrono::milliseconds(20);

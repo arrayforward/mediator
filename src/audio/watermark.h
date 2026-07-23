@@ -7,8 +7,8 @@
 //   用系统时间对齐，导致 AEC 收敛差。
 //
 // 实现思路：
-//   1. 会话开始录音前，下行注入"多脉冲 chirp 水印"（1k→4kHz 扫频，8 声、
-//      固定间隔 GAP，总时长 2.26s）。选 chirp 是因为宽带信号互相关峰尖锐，
+//   1. 会话开始录音前，下行注入"多脉冲 chirp 水印"（1k→4kHz 扫频，4 声、
+//      固定间隔 GAP，总时长 0.98s）。选 chirp 是因为宽带信号互相关峰尖锐，
 //      抗失真抗噪；多脉冲冗余应对真机扬声器→麦克风回环的高损耗。
 //   2. 在录回的 PCM 中与本地模板做滑动归一化互相关（NCC 匹配滤波），
 //      非极大抑制提取峰值；多脉冲一致性投票：候选首脉冲的栅格
@@ -45,7 +45,9 @@ struct WatermarkConfig {
     double amplitude = 0.9;       // 接近满幅，int16 留 ~10% 余量防削波
     double ncc_threshold = 0.6;   // 检测阈值
     int interval_tolerance_ms = 2;
-    int chirp_count = 8;          // 脉冲数（仅生成侧用）：8×320ms → 总时长 2.26s
+    int chirp_count = 4;          // 脉冲数（仅生成侧用）：4×320ms → 总时长 0.98s
+                                  // （真机体验优化：原 8 脉冲 2.26s 死窗过长；
+                                  // 投票命中 ≥count-2 且最深槽 ≥count-2 仍拒偏移子序列）
 };
 
 struct WatermarkDetectResult {

@@ -112,12 +112,13 @@ TEST(Watermark, SurvivesG711Distortion) {
 TEST(Watermark, LongMultiPulseWithinHeadroom) {
     WatermarkConfig cfg;
     const auto wm = GenerateWatermark(cfg);
-    // 结构：chirp_count 个脉冲等间隔，总时长 = (count-1)*gap + 单声 ≈ 2.26s
+    // 结构：chirp_count 个脉冲等间隔，总时长 = (count-1)*gap + 单声 ≈ 0.98s
+    //（真机体验优化：死窗 <1s；投票规则随 count 自适应）
     const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
     const int one = cfg.chirp_ms * cfg.sample_rate / 1000;
     ASSERT_EQ(static_cast<int>(wm.size()), (cfg.chirp_count - 1) * gap + one);
-    EXPECT_GT(wm.size(), 2u * cfg.sample_rate);   // >2s：真机回环可采
-    EXPECT_LT(wm.size(), 3u * cfg.sample_rate);   // <3s：不拖慢会话建立
+    EXPECT_GT(wm.size(), static_cast<size_t>(cfg.sample_rate) / 2); // ≥0.5s 可闻可采
+    EXPECT_LT(wm.size(), static_cast<size_t>(cfg.sample_rate));     // <1s 不拖会话
     // 每个脉冲起点非零（等间隔结构成立）
     for (int k = 0; k < cfg.chirp_count; ++k) {
         int peak = 0;
@@ -173,13 +174,13 @@ TEST(Watermark, MissingLastTwoPulsesRejected) {
     EXPECT_FALSE(DetectWatermark(cap, cfg).detected);
 }
 
-// 中间 1 个脉冲畸变（置零）：7/8 槽命中且尾槽在位 → 仍标定，p1 不偏移
+// 中间 1 个脉冲畸变（置零）：3/4 槽命中且最深槽在位 → 仍标定，p1 不偏移
 TEST(Watermark, MiddlePulseMangledStillDetected) {
     WatermarkConfig cfg;
     auto wm = GenerateWatermark(cfg);
     const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
     const int one = cfg.chirp_ms * cfg.sample_rate / 1000;
-    std::fill(wm.begin() + 3 * gap, wm.begin() + 3 * gap + one, 0);
+    std::fill(wm.begin() + 1 * gap, wm.begin() + 1 * gap + one, 0); // 第 2 脉冲
     const auto det = DetectWatermark(wm, cfg);
     ASSERT_TRUE(det.detected);
     EXPECT_EQ(det.p1, 0);
@@ -200,9 +201,9 @@ TEST(Watermark, NoEarlyDetectionBeforePenultimateSlot) {
                                   wm.begin() + (pulses - 1) * gap + one + gap / 2);
         EXPECT_FALSE(DetectWatermark(part, cfg).detected) << "pulses=" << pulses;
     }
-    // 次尾槽(count-2)在位即可触发
-    std::vector<int16_t> seven(wm.begin(),
-                               wm.begin() + (cfg.chirp_count - 2) * gap + one + gap / 2);
-    EXPECT_TRUE(DetectWatermark(seven, cfg).detected);
+    // 次尾槽(count-2)在位即可触发（count=4 时即 3 脉冲前缀，~0.66s+回环）
+    std::vector<int16_t> penult(wm.begin(),
+                                wm.begin() + (cfg.chirp_count - 2) * gap + one + gap / 2);
+    EXPECT_TRUE(DetectWatermark(penult, cfg).detected);
     EXPECT_TRUE(DetectWatermark(wm, cfg).detected); // 完整水印 → 触发
 }
