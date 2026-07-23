@@ -75,6 +75,7 @@ private:
     void OnLlmFailed(const Message& m, ChangeSet& cs); // LLM 失败兜底（A→P→缓存/degraded）
     void OnTtsChunk(const Message& m, ChangeSet& cs);
     void OnWmDetected(const Message& m, ChangeSet& cs);
+    void OnAecBypass(const Message& m, ChangeSet& cs); // 标定超时旁路：解锁丢帧门
     void OnVadUpdate(const Message& m, ChangeSet& cs);   // 服务端 VAD（含打断检测）
     void OnAudioCancel(const Message& m, ChangeSet& cs); // 端侧取消 → 打断
     void DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs);

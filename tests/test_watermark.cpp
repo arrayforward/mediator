@@ -152,12 +152,24 @@ TEST(Watermark, ShiftedPulseSubsetRejected) {
     EXPECT_GT(det.debug_matched_slots, 0); // 有局部命中但被尾槽规则否决
 }
 
-// 尾脉冲被截（用户抢话/回环提前结束）→ 尾槽缺失 → 拒绝
-TEST(Watermark, MissingTailPulseRejected) {
+// 尾脉冲缺失（真机 AGC/截放下尾脉冲不稳定）：次尾槽(count-2)在位 → 接受
+TEST(Watermark, MissingLastPulseAcceptedViaPenultimateSlot) {
     WatermarkConfig cfg;
     const auto wm = GenerateWatermark(cfg);
     const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
-    std::vector<int16_t> cap(wm.begin(), wm.end() - gap);
+    std::vector<int16_t> cap(wm.begin(), wm.end() - gap); // 去掉最后一个脉冲
+    const auto det = DetectWatermark(cap, cfg);
+    ASSERT_TRUE(det.detected);
+    EXPECT_EQ(det.p1, 0);
+    EXPECT_NEAR(det.skew, 0.0, 2e-5);
+}
+
+// 末两脉冲都缺失（次尾槽也不在）→ 拒绝，走超时 bypass
+TEST(Watermark, MissingLastTwoPulsesRejected) {
+    WatermarkConfig cfg;
+    const auto wm = GenerateWatermark(cfg);
+    const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
+    std::vector<int16_t> cap(wm.begin(), wm.end() - 2 * gap);
     EXPECT_FALSE(DetectWatermark(cap, cfg).detected);
 }
 
@@ -174,18 +186,23 @@ TEST(Watermark, MiddlePulseMangledStillDetected) {
     EXPECT_NEAR(det.skew, 0.0, 2e-5);
 }
 
-// 检测不得在完整水印入缓冲前触发——否则触发点之后的 chirp 尾巴会漏进
+// 检测不得在次尾槽入缓冲前触发——否则触发点之后的 chirp 尾巴会漏进
 // ASR 流毒化识别（convai_sim 回环 2.5min 无 final 的根因，2 脉冲时代
-// 检测需双脉冲齐、触发点≈水印末尾，故无此问题）
-TEST(Watermark, NoEarlyDetectionBeforeFullWatermark) {
+// 检测需双脉冲齐、触发点≈水印末尾，故无此问题）。次尾槽规则下残留
+// 尾巴 ≤1 个脉冲（≤340ms），实测不毒化 ASR。
+TEST(Watermark, NoEarlyDetectionBeforePenultimateSlot) {
     WatermarkConfig cfg;
     const auto wm = GenerateWatermark(cfg);
     const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
     const int one = cfg.chirp_ms * cfg.sample_rate / 1000;
-    for (int pulses = 2; pulses < cfg.chirp_count; ++pulses) {
+    for (int pulses = 2; pulses <= cfg.chirp_count - 2; ++pulses) {
         std::vector<int16_t> part(wm.begin(),
                                   wm.begin() + (pulses - 1) * gap + one + gap / 2);
         EXPECT_FALSE(DetectWatermark(part, cfg).detected) << "pulses=" << pulses;
     }
+    // 次尾槽(count-2)在位即可触发
+    std::vector<int16_t> seven(wm.begin(),
+                               wm.begin() + (cfg.chirp_count - 2) * gap + one + gap / 2);
+    EXPECT_TRUE(DetectWatermark(seven, cfg).detected);
     EXPECT_TRUE(DetectWatermark(wm, cfg).detected); // 完整水印 → 触发
 }

@@ -68,6 +68,7 @@ enum class MsgType : uint16_t {
     kVadUpdate,            // 服务端 APM VAD 结果（flags: kVoice/kVadEnd/kAsrEndpoint）
     kAudioCancel,          // 端侧取消播放（convai AudioOp 0x13 → 打断）
     kLlmFailed,            // LLM RPC 失败/超时（text=method，aux=语句代际）
+    kAecBypass,            // 水印标定超时旁路（aux=连接代际）：解锁上行丢帧门，AEC 直通
 };
 
 // 音频帧 flags

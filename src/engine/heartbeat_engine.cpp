@@ -30,6 +30,7 @@ void HeartbeatEngine::ProcessOne(const Message& m, ChangeSet& cs) {
     case MsgType::kLlmFailed: OnLlmFailed(m, cs); break;
     case MsgType::kTtsAudioChunk: OnTtsChunk(m, cs); break;
     case MsgType::kWmDetected: OnWmDetected(m, cs); break;
+    case MsgType::kAecBypass: OnAecBypass(m, cs); break;
     case MsgType::kVadUpdate: OnVadUpdate(m, cs); break;
     case MsgType::kAudioCancel: OnAudioCancel(m, cs); break;
     case MsgType::kCtxRestored: {
@@ -331,6 +332,18 @@ void HeartbeatEngine::OnWmDetected(const Message& m, ChangeSet& cs) {
     s->m_aecCalib.valid = true;
     s->m_aecCalib.delay_samples = static_cast<int32_t>(m.aux);
     s->m_aecCalib.skew = m.dval;
+    s->m_wmPending = false;
+    m_board.MarkChanged(m.session_id);
+}
+
+// 标定超时旁路（ws_server 15s 兜底）：只解锁上行丢帧门——m_aecCalib.valid
+// 保持 false（AEC 直通，不是伪标定；APM 不收 SetCalib，render/capture 不
+// 对齐即旁路）。旧代际连接的迟到 bypass（重连已重新进入标定期）不解锁。
+void HeartbeatEngine::OnAecBypass(const Message& m, ChangeSet& cs) {
+    (void)cs;
+    auto* s = m_board.FindSession(m.session_id);
+    if (!s) return;
+    if (static_cast<uint64_t>(m.aux) < s->m_connGeneration) return;
     s->m_wmPending = false;
     m_board.MarkChanged(m.session_id);
 }

@@ -107,8 +107,10 @@ WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
     // 锁到偏移的脉冲子序列——delay 离群（实测 9503 vs 正常 ~4229）导致 AEC
     // 延迟线错位、语音被消。现改为：以每个峰为候选首脉冲，在其栅格
     // p+k*GAP（k=0..count-1）上统计命中峰数，要求命中 ≥ count-2（允许至多
-    // 2 个脉冲缺失/畸变）且尾槽（k=count-1）在位——后者同时保证"检测触发时
-    // 完整水印已入缓冲"，检测点之后不再有 chirp 尾巴漏进 ASR 流（sim 回归根因）。
+    // 2 个脉冲缺失/畸变）且最深命中槽 ≥ count-2（尾槽或次尾槽在位）——
+    // 偏移子序列的最深槽到不了 count-2，仍被拒；尾槽在位要求同时把检测触发
+    // 点压到水印末尾（尾脉冲真机不稳定，放宽到次尾槽后残留尾巴 ≤1 脉冲，
+    // 不会毒化 ASR 流——sim 回归根因）。
     const int count = std::max(cfg.chirp_count, 2);
     const int need = std::max(2, count - 2);
     int best_matched = 0, best_last_k = -1;
@@ -129,7 +131,7 @@ WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
             }
         }
         if (matched > best_matched ||
-            (matched == best_matched && last_k == count - 1 && best_last_k != count - 1)) {
+            (matched == best_matched && last_k > best_last_k)) {
             best_matched = matched;
             best_last_k = last_k;
             best_p1 = peaks[c].pos;
@@ -137,7 +139,7 @@ WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
         }
     }
     res.debug_matched_slots = best_matched;
-    if (best_matched < need || best_last_k != count - 1) return res;
+    if (best_matched < need || best_last_k < count - 2) return res;
 
     // skew：相邻命中槽间隔序列取中位数（抗单个脉冲畸变/伪峰）
     std::vector<double> iv;

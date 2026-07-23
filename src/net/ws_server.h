@@ -77,6 +77,8 @@ private:
     void PluginSessionLoop(std::shared_ptr<Conn> conn, const std::string& plugin_path);
     void JwtSessionLoop(std::shared_ptr<Conn> conn);    // 现有 JWT 路径
     void CleanupConn(std::shared_ptr<Conn> conn);
+    // 标定超时旁路：通知引擎解锁上行丢帧门（AEC 直通，不伪标定）
+    void InjectAecBypass(const std::shared_ptr<Conn>& conn);
     // 出站队列：ssl_stream 不允许跨线程并发 sync read+write，
     // 所有下行写入排队，由会话线程在读超时（20ms）轮转时落盘
     void QueueOutbound(const std::shared_ptr<Conn>& conn, bool is_text,

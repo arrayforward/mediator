@@ -307,6 +307,7 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
                              conn->uid, conn->last_det.peak_ncc,
                              conn->last_det.debug_peaks,
                              conn->last_det.debug_matched_slots);
+                    InjectAecBypass(conn); // 解锁引擎上行丢帧门（AEC 直通）
                 } else {
                 conn->calib_buf.insert(conn->calib_buf.end(), pcm.begin(), pcm.end());
                 const auto det = audio::DetectWatermark(conn->calib_buf, m_wmCfg);
@@ -407,6 +408,7 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
                      conn->uid, conn->last_det.peak_ncc,
                      conn->last_det.debug_peaks,
                      conn->last_det.debug_matched_slots);
+            InjectAecBypass(conn); // 解锁引擎上行丢帧门（AEC 直通）
             return true;
         }
         // 协议侧 8k 直接检测（模板匹配 16k chirp 降采样后的 0.5k~2k 频带），
@@ -479,6 +481,17 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
     } catch (const std::exception& e) {
         MDT_DEBUG("plugin session error: {}", e.what());
     }
+}
+
+void WsServer::InjectAecBypass(const std::shared_ptr<Conn>& conn) {
+    // 标定超时旁路：引擎据此停止丢弃上行帧（m_wmPending=false），
+    // AEC 直通（不注入 kWmDetected，valid 保持 false，APM 不做对齐）
+    Message b;
+    b.type = MsgType::kAecBypass;
+    b.session_id = conn->sid;
+    b.ts_ms = g_clock.NowMs();
+    b.aux = static_cast<int64_t>(conn->gen); // 代际号：引擎忽略旧连接迟到的 bypass
+    m_cb.inject(std::move(b));
 }
 
 void WsServer::CleanupConn(std::shared_ptr<Conn> conn) {

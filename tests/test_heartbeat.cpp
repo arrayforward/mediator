@@ -401,6 +401,50 @@ TEST_F(Fixture, StaleDisconnectIgnoredAfterReconnect) {
     EXPECT_EQ(s->m_connGeneration, 2u);
 }
 
+// ---- 标定超时旁路（kAecBypass：解锁上行丢帧门）----
+
+// 超时 bypass 后上行帧不再被丢：m_wmPending 复位、valid 保持 false（AEC 直通）
+TEST_F(Fixture, AecBypassUnlocksUplinkDropGate) {
+    auto c = Msg(MsgType::kWsConnected, clock.NowMs());
+    c.text = kUid; c.aux = 1;
+    engine.Inject(std::move(c));
+    engine.RunOnce(); // 下发水印，进入标定期
+    Voice(clock.NowMs());
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_NE(s, nullptr);
+    ASSERT_EQ(s->m_droppedFramesWm, 1u); // 标定期丢帧中
+
+    auto b = Msg(MsgType::kAecBypass, clock.NowMs());
+    b.aux = 1; // ws_server 超时注入（aux=连接 gen）
+    engine.Inject(std::move(b));
+    engine.RunOnce();
+    EXPECT_FALSE(s->m_wmPending);      // 丢帧门关闭
+    EXPECT_FALSE(s->m_aecCalib.valid); // AEC 直通（非伪标定）
+
+    Voice(clock.NowMs());
+    engine.RunOnce();
+    EXPECT_EQ(s->m_droppedFramesWm, 1u); // 不再丢帧
+    EXPECT_TRUE(s->m_uttActive);         // 正常进入语句状态机
+}
+
+// 旧代际的迟到 bypass（重连后新连接正在标定）→ 不解锁
+TEST_F(Fixture, StaleGenAecBypassIgnored) {
+    ConnectAndCalibrate();
+    auto c2 = Msg(MsgType::kWsConnected, clock.NowMs());
+    c2.text = kUid; c2.aux = 2;
+    engine.Inject(std::move(c2));
+    engine.RunOnce(); // 新连接 gen=2，重新进入标定期
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_TRUE(s->m_wmPending);
+
+    auto b = Msg(MsgType::kAecBypass, clock.NowMs());
+    b.aux = 1; // 旧 gen=1 连接的迟到超时消息
+    engine.Inject(std::move(b));
+    engine.RunOnce();
+    EXPECT_TRUE(s->m_wmPending); // 新连接标定期不被打扰
+}
+
 // ---- A 段失败兜底（kLlmFailed：A→P→缓存占位→degraded）----
 
 // A 段(quick)失败 → 立即触发 P 段占位生成；同语句不重复触发；P 成功正常下发
