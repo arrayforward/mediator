@@ -64,6 +64,7 @@ struct WsServer::Conn {
     std::unique_ptr<ext::ProtocolPlugin> plugin;
     std::vector<int16_t> calib_buf8k; // 8k 协议侧标定缓冲
     int64_t calib_start_ms = 0; // 首次喂标定缓冲的时间（超时兜底用）
+    audio::WatermarkDetectResult last_det; // 最近一次检测结果（超时 WARN 诊断用）
 };
 
 namespace {
@@ -301,10 +302,15 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
                     conn->calibrated = true; // 超时兜底：AEC 旁路
                     conn->calib_buf.clear();
                     conn->calib_buf.shrink_to_fit();
-                    MDT_WARN("aec calib timeout uid={} -> bypass aec", conn->uid);
+                    MDT_WARN("aec calib timeout uid={} -> bypass aec "
+                             "(ncc={:.3f} peaks={} matched_slots={})",
+                             conn->uid, conn->last_det.peak_ncc,
+                             conn->last_det.debug_peaks,
+                             conn->last_det.debug_matched_slots);
                 } else {
                 conn->calib_buf.insert(conn->calib_buf.end(), pcm.begin(), pcm.end());
                 const auto det = audio::DetectWatermark(conn->calib_buf, m_wmCfg);
+                conn->last_det = det;
                 MDT_DEBUG("wm detect buf={} ncc={:.3f} detected={}",
                           conn->calib_buf.size(), det.peak_ncc, det.detected);
                 if (det.detected) {
@@ -396,7 +402,11 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
             conn->calibrated = true; // 超时兜底：无回声标定，AEC 旁路
             conn->calib_buf8k.clear();
             conn->calib_buf8k.shrink_to_fit();
-            MDT_WARN("aec calib timeout uid={} -> bypass aec", conn->uid);
+            MDT_WARN("aec calib timeout uid={} -> bypass aec "
+                     "(ncc={:.3f} peaks={} matched_slots={})",
+                     conn->uid, conn->last_det.peak_ncc,
+                     conn->last_det.debug_peaks,
+                     conn->last_det.debug_matched_slots);
             return true;
         }
         // 协议侧 8k 直接检测（模板匹配 16k chirp 降采样后的 0.5k~2k 频带），
@@ -404,6 +414,7 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
         const auto pcm = audio::DecodeALaw(std::vector<uint8_t>(data, data + len));
         conn->calib_buf8k.insert(conn->calib_buf8k.end(), pcm.begin(), pcm.end());
         const auto det = audio::DetectWatermark(conn->calib_buf8k, m_wmCfg8k);
+        conn->last_det = det;
         if (!det.detected) return false;
         conn->calibrated = true;
         MDT_INFO("aec calibrated uid={} delay8k={} skew={:.6f}", conn->uid,

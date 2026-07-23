@@ -98,19 +98,63 @@ WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
         peaks.push_back({s + off, ncc[s]});
     }
     if (peaks.size() < 2) return res;
+    res.debug_peaks = static_cast<int>(peaks.size());
 
     const int expect = cfg.gap_ms * cfg.sample_rate / 1000;
     const int tol = cfg.interval_tolerance_ms * cfg.sample_rate / 1000;
-    for (size_t i = 0; i + 1 < peaks.size(); ++i) {
-        const double d = peaks[i + 1].pos - peaks[i].pos;
-        if (std::abs(d - expect) <= tol) {
-            res.detected = true;
-            res.p1 = static_cast<int64_t>(std::llround(peaks[i].pos));
-            res.p2 = static_cast<int64_t>(std::llround(peaks[i + 1].pos));
-            res.skew = d / expect - 1.0;
-            return res;
+    // 多脉冲一致性投票（真机误锁回归修复）：旧策略取"首个间隔≈GAP 的相邻
+    // 峰对"，8 脉冲冗余下部分脉冲畸变（扬声器 AGC 爬坡/抢话/回声伪峰）时会
+    // 锁到偏移的脉冲子序列——delay 离群（实测 9503 vs 正常 ~4229）导致 AEC
+    // 延迟线错位、语音被消。现改为：以每个峰为候选首脉冲，在其栅格
+    // p+k*GAP（k=0..count-1）上统计命中峰数，要求命中 ≥ count-2（允许至多
+    // 2 个脉冲缺失/畸变）且尾槽（k=count-1）在位——后者同时保证"检测触发时
+    // 完整水印已入缓冲"，检测点之后不再有 chirp 尾巴漏进 ASR 流（sim 回归根因）。
+    const int count = std::max(cfg.chirp_count, 2);
+    const int need = std::max(2, count - 2);
+    int best_matched = 0, best_last_k = -1;
+    double best_p1 = 0.0;
+    std::vector<double> best_slots;
+    for (size_t c = 0; c < peaks.size(); ++c) {
+        std::vector<double> slots(count, -1.0);
+        int matched = 0, last_k = -1;
+        for (const auto& pk : peaks) {
+            const double rel = pk.pos - peaks[c].pos;
+            const long k = std::lround(rel / expect);
+            if (k < 0 || k >= count) continue;
+            if (std::abs(rel - static_cast<double>(k) * expect) > tol) continue;
+            if (slots[k] < 0.0) {
+                slots[k] = pk.pos;
+                ++matched;
+                if (k > last_k) last_k = static_cast<int>(k);
+            }
+        }
+        if (matched > best_matched ||
+            (matched == best_matched && last_k == count - 1 && best_last_k != count - 1)) {
+            best_matched = matched;
+            best_last_k = last_k;
+            best_p1 = peaks[c].pos;
+            best_slots = std::move(slots);
         }
     }
+    res.debug_matched_slots = best_matched;
+    if (best_matched < need || best_last_k != count - 1) return res;
+
+    // skew：相邻命中槽间隔序列取中位数（抗单个脉冲畸变/伪峰）
+    std::vector<double> iv;
+    for (int k = 0; k + 1 < count; ++k)
+        if (best_slots[k] >= 0.0 && best_slots[k + 1] >= 0.0)
+            iv.push_back(best_slots[k + 1] - best_slots[k]);
+    double med = expect;
+    if (!iv.empty()) {
+        std::sort(iv.begin(), iv.end());
+        med = iv[iv.size() / 2];
+    }
+    res.detected = true;
+    res.p1 = static_cast<int64_t>(std::llround(best_p1));
+    res.p2 = static_cast<int64_t>(
+        std::llround(best_slots.size() > 1 && best_slots[1] >= 0.0 ? best_slots[1]
+                                                                   : best_p1 + expect));
+    res.skew = med / expect - 1.0;
     return res;
 }
 

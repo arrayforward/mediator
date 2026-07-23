@@ -134,5 +134,58 @@ TEST(Watermark, LongMultiPulseWithinHeadroom) {
     const auto loop = mediator::audio::DecodeALaw(mediator::audio::EncodeALaw(wm));
     const auto det = DetectWatermark(loop, cfg);
     ASSERT_TRUE(det.detected);
-    EXPECT_EQ(det.p1, 0); // 返回首个匹配相邻对的左峰 = 第一个脉冲
+    EXPECT_EQ(det.p1, 0); // 一致性投票胜出候选的首脉冲 = 第一个脉冲
+}
+
+// ---- 多脉冲误锁回归（真机 delay8k=9503 离群 / sim 回环 2.5min 无 ASR final）----
+
+// 前 2 脉冲畸变缺失（扬声器 AGC 爬坡）：旧检测器会把脉冲3-4 当首对，
+// delay 偏大 2×GAP（离群值）→ 一致性投票必须拒绝（缺尾槽）
+TEST(Watermark, ShiftedPulseSubsetRejected) {
+    WatermarkConfig cfg;
+    const auto wm = GenerateWatermark(cfg);
+    const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
+    std::vector<int16_t> cap(wm.size() + 1600, 0);
+    std::copy(wm.begin() + 2 * gap, wm.end(), cap.begin() + 2 * gap);
+    const auto det = DetectWatermark(cap, cfg);
+    EXPECT_FALSE(det.detected);
+    EXPECT_GT(det.debug_matched_slots, 0); // 有局部命中但被尾槽规则否决
+}
+
+// 尾脉冲被截（用户抢话/回环提前结束）→ 尾槽缺失 → 拒绝
+TEST(Watermark, MissingTailPulseRejected) {
+    WatermarkConfig cfg;
+    const auto wm = GenerateWatermark(cfg);
+    const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
+    std::vector<int16_t> cap(wm.begin(), wm.end() - gap);
+    EXPECT_FALSE(DetectWatermark(cap, cfg).detected);
+}
+
+// 中间 1 个脉冲畸变（置零）：7/8 槽命中且尾槽在位 → 仍标定，p1 不偏移
+TEST(Watermark, MiddlePulseMangledStillDetected) {
+    WatermarkConfig cfg;
+    auto wm = GenerateWatermark(cfg);
+    const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
+    const int one = cfg.chirp_ms * cfg.sample_rate / 1000;
+    std::fill(wm.begin() + 3 * gap, wm.begin() + 3 * gap + one, 0);
+    const auto det = DetectWatermark(wm, cfg);
+    ASSERT_TRUE(det.detected);
+    EXPECT_EQ(det.p1, 0);
+    EXPECT_NEAR(det.skew, 0.0, 2e-5);
+}
+
+// 检测不得在完整水印入缓冲前触发——否则触发点之后的 chirp 尾巴会漏进
+// ASR 流毒化识别（convai_sim 回环 2.5min 无 final 的根因，2 脉冲时代
+// 检测需双脉冲齐、触发点≈水印末尾，故无此问题）
+TEST(Watermark, NoEarlyDetectionBeforeFullWatermark) {
+    WatermarkConfig cfg;
+    const auto wm = GenerateWatermark(cfg);
+    const int gap = cfg.gap_ms * cfg.sample_rate / 1000;
+    const int one = cfg.chirp_ms * cfg.sample_rate / 1000;
+    for (int pulses = 2; pulses < cfg.chirp_count; ++pulses) {
+        std::vector<int16_t> part(wm.begin(),
+                                  wm.begin() + (pulses - 1) * gap + one + gap / 2);
+        EXPECT_FALSE(DetectWatermark(part, cfg).detected) << "pulses=" << pulses;
+    }
+    EXPECT_TRUE(DetectWatermark(wm, cfg).detected); // 完整水印 → 触发
 }
