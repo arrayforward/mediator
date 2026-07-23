@@ -27,6 +27,7 @@ void HeartbeatEngine::ProcessOne(const Message& m, ChangeSet& cs) {
     case MsgType::kLlmQuickResp:
     case MsgType::kLlmRestate:
     case MsgType::kLlmFinalAnswer: OnLlmText(m, cs); break;
+    case MsgType::kLlmFailed: OnLlmFailed(m, cs); break;
     case MsgType::kTtsAudioChunk: OnTtsChunk(m, cs); break;
     case MsgType::kWmDetected: OnWmDetected(m, cs); break;
     case MsgType::kVadUpdate: OnVadUpdate(m, cs); break;
@@ -128,6 +129,8 @@ void HeartbeatEngine::OnAudioFrame(const Message& m, ChangeSet& cs) {
             s->m_uttStartMs = m.ts_ms;
             s->m_vadEndpoint = false;      // 新语句开始才重置断句标志
             s->m_quickRespSubmitted = false; // 新一轮允许再次触发安抚
+            s->m_aFallbackDone = false;      // 新一轮允许再次失败兜底
+            s->m_degradedSent = false;
         }
         s->m_lastVoiceMs = m.ts_ms;
         s->m_state = SessionState::kListening;
@@ -192,6 +195,53 @@ void HeartbeatEngine::EmitTts(SessionContext& s, ClipId clip, const std::string&
                                      static_cast<int64_t>(s.m_uttGen)});
 }
 
+// ---- LLM 失败兜底（A 段 → P 段 → 缓存占位 → degraded）----
+// A 段(quick)失败/超时：立即走占位兜底（每语句一次，不与 B/C 慢重复）——
+// 有上一次占位音缓存直接复用（离线可播），无缓存则请求 P 段生成；
+// P 再失败：摘掉永不就绪的占位 clip（防堵死队首 B/C），有缓存复用，
+// 无缓存给端侧明确 degraded 状态帧（不死寂）。B/C 生成不受影响照常并行。
+void HeartbeatEngine::OnLlmFailed(const Message& m, ChangeSet& cs) {
+    auto* s = m_board.FindSession(m.session_id);
+    if (!s || s->m_state == SessionState::kOffline) return;
+    if (static_cast<uint64_t>(m.aux) != s->m_uttGen) return; // 旧代际失败忽略
+    if (m.text == "quick") {
+        if (s->m_aFallbackDone) return;
+        s->m_aFallbackDone = true;
+        TriggerPlaceholderFallback(*s, cs);
+    } else if (m.text == "quick_placeholder") {
+        for (auto it = s->m_playQueue.begin(); it != s->m_playQueue.end(); ++it) {
+            if (it->id == clip::kPlaceholder && !it->audio_ready) {
+                s->m_playQueue.erase(it);
+                break;
+            }
+        }
+        if (s->m_hasLastPlaceholder) {
+            if (!FindClip(*s, clip::kPlaceholder)) EnqueueReusePlaceholder(*s, cs);
+        } else if (!s->m_degradedSent) {
+            s->m_degradedSent = true;
+            const std::string t =
+                R"(status:{"status":"degraded","reason":"llm_unavailable"})";
+            cs.ws_sends.push_back(
+                WsOutbound{m.session_id, clip::kNone, true, {t.begin(), t.end()}});
+        }
+    }
+    // restate/answer 失败：由 EvolvePlayback 的 B/C 超时预算走占位路径，此处不处理
+    m_board.MarkChanged(m.session_id);
+}
+
+void HeartbeatEngine::TriggerPlaceholderFallback(SessionContext& s, ChangeSet& cs) {
+    if (FindClip(s, clip::kPlaceholder)) return; // 已有占位在途（如 B 超时触发）
+    if (s.m_hasLastPlaceholder) {
+        EnqueueReusePlaceholder(s, cs); // 离线兜底：直接播上一次占位音
+        return;
+    }
+    ClipBuffer p; p.id = clip::kPlaceholder; p.requested_ms = 0;
+    s.m_playQueue.push_front(std::move(p));
+    cs.grpc_calls.push_back(GrpcCall{"llm", "quick_placeholder", s.m_sessionId,
+                                     clip::kPlaceholder, s.m_chatCtx,
+                                     static_cast<int64_t>(s.m_uttGen)});
+}
+
 void HeartbeatEngine::OnTtsChunk(const Message& m, ChangeSet& cs) {
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
@@ -225,6 +275,8 @@ void HeartbeatEngine::DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs) {
     ++s.m_uttGen;
     s.m_placeholderRounds = 0;
     s.m_quickRespSubmitted = false; // 新语句允许再次触发安抚
+    s.m_aFallbackDone = false;      // 新语句允许再次失败兜底
+    s.m_degradedSent = false;
     s.m_vadEndpoint = false;
     s.m_uttActive = true;
     s.m_uttStartMs = now;
@@ -253,6 +305,8 @@ void HeartbeatEngine::OnVadUpdate(const Message& m, ChangeSet& cs) {
             s->m_uttStartMs = m.ts_ms;
             s->m_vadEndpoint = false;      // 新语句开始才重置断句标志
             s->m_quickRespSubmitted = false;
+            s->m_aFallbackDone = false;
+            s->m_degradedSent = false;
         }
         s->m_lastVoiceMs = m.ts_ms;
     } else {

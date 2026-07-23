@@ -11,6 +11,7 @@
 // 核心业务逻辑分布：
 //   消息处理 —— 连接建立(发AEC水印)、音频帧(标定期丢弃/有声累积/VAD断句)、
 //              ASR Final(并行请求 LLM restate+answer)、LLM 文本(触发 TTS)、
+//              LLM 失败(A段→P段→缓存占位→degraded 逐级兜底)、
 //              TTS 音频块(入播放队列/占位音持久缓存)、水印检测结果
 //   演进组件 —— QuickRespTrigger(>5s或首次断句→请求安抚音频A)、
 //              PlaybackScheduler(严格按序下发; B/C 超时→场景化占位;
@@ -71,6 +72,7 @@ private:
     void OnAudioFrame(const Message& m, ChangeSet& cs);
     void OnAsrFinal(const Message& m, ChangeSet& cs);
     void OnLlmText(const Message& m, ChangeSet& cs);
+    void OnLlmFailed(const Message& m, ChangeSet& cs); // LLM 失败兜底（A→P→缓存/degraded）
     void OnTtsChunk(const Message& m, ChangeSet& cs);
     void OnWmDetected(const Message& m, ChangeSet& cs);
     void OnVadUpdate(const Message& m, ChangeSet& cs);   // 服务端 VAD（含打断检测）
@@ -86,6 +88,7 @@ private:
     void EmitTts(SessionContext& s, ClipId clip, const std::string& text, ChangeSet& cs);
     static ClipBuffer* FindClip(SessionContext& s, ClipId id);
     void EnqueueReusePlaceholder(SessionContext& s, ChangeSet& cs);
+    void TriggerPlaceholderFallback(SessionContext& s, ChangeSet& cs);
 
     EngineConfig m_cfg;
     const IClock& m_clock;

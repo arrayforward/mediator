@@ -228,7 +228,15 @@ void Gateway::ExecGrpcCall(const GrpcCall& call) {
     if (call.service == "llm") {
         const std::string text = m_backend->LlmGenerate(call.method, call.request_bytes,
                                                         call.session_id);
-        if (text.empty()) return; // 超时路径由演进组件兜底
+        if (text.empty()) {
+            // 失败/超时回注引擎：A 段(quick)/P 段(quick_placeholder)兜底由
+            // 心跳立即触发（B/C 失败仍由演进组件的超时预算兜底）
+            MDT_WARN("llm {} failed sid={} -> inject kLlmFailed", call.method,
+                     net::SidHex(call.session_id));
+            Inject(MsgType::kLlmFailed, call.session_id, call.clip_id, call.method,
+                   {}, call.aux);
+            return;
+        }
         if (call.method == "restate")
             Inject(MsgType::kLlmRestate, call.session_id, call.clip_id, text, {}, call.aux);
         else if (call.method == "answer")

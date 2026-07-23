@@ -401,6 +401,127 @@ TEST_F(Fixture, StaleDisconnectIgnoredAfterReconnect) {
     EXPECT_EQ(s->m_connGeneration, 2u);
 }
 
+// ---- A 段失败兜底（kLlmFailed：A→P→缓存占位→degraded）----
+
+// A 段(quick)失败 → 立即触发 P 段占位生成；同语句不重复触发；P 成功正常下发
+TEST_F(Fixture, QuickFailureTriggersPlaceholderFallback) {
+    ConnectAndCalibrate();
+    Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    const auto cs1 = engine.RunOnce(); // 断句触发 llm quick
+    ASSERT_EQ(CountGrpc(cs1, "llm", "quick"), 1u);
+
+    auto f = Msg(MsgType::kLlmFailed, clock.NowMs());
+    f.text = "quick"; f.aux = 0; // 语句代际 0
+    engine.Inject(std::move(f));
+    const auto cs2 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs2, "llm", "quick_placeholder"), 1u); // P 段被触发
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_NE(s, nullptr);
+    ASSERT_FALSE(s->m_playQueue.empty());
+    EXPECT_EQ(s->m_playQueue.front().id, clip::kPlaceholder);
+
+    // 同语句再次失败 → 不重复触发（占位只播一次）
+    auto f2 = Msg(MsgType::kLlmFailed, clock.NowMs());
+    f2.text = "quick"; f2.aux = 0;
+    engine.Inject(std::move(f2));
+    const auto cs3 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs3, "llm", "quick_placeholder"), 0u);
+
+    // P 成功（文本→TTS→音频）→ 占位音正常下发
+    auto t = Msg(MsgType::kLlmQuickResp, clock.NowMs());
+    t.clip_id = clip::kPlaceholder; t.text = "请稍等"; t.aux = 0;
+    engine.Inject(std::move(t));
+    auto a = Msg(MsgType::kTtsAudioChunk, clock.NowMs());
+    a.clip_id = clip::kPlaceholder; a.payload = {1, 2, 3}; a.aux = 0;
+    engine.Inject(std::move(a));
+    const auto cs4 = engine.RunOnce();
+    bool sent = false;
+    for (const auto& w : cs4.ws_sends)
+        if (w.clip_id == clip::kPlaceholder && w.bytes.size() == 3u) sent = true;
+    EXPECT_TRUE(sent);
+}
+
+// A 失败且有上一次占位缓存 → 直接复用（离线兜底，不调 P 段）
+TEST_F(Fixture, QuickFailureWithCacheReusesPlaceholder) {
+    ConnectAndCalibrate();
+    auto* s0 = engine.Board().FindSession(kSid);
+    ASSERT_NE(s0, nullptr);
+    s0->m_lastPlaceholder.id = clip::kPlaceholder;
+    s0->m_lastPlaceholder.g711 = {7, 7, 7};
+    s0->m_lastPlaceholder.audio_ready = true;
+    s0->m_hasLastPlaceholder = true;
+
+    Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    engine.RunOnce();
+    auto f = Msg(MsgType::kLlmFailed, clock.NowMs());
+    f.text = "quick"; f.aux = 0;
+    engine.Inject(std::move(f));
+    const auto cs = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs, "llm", "quick_placeholder"), 0u); // 不生成
+    bool sent = false;
+    for (const auto& w : cs.ws_sends)
+        if (w.clip_id == clip::kPlaceholder &&
+            w.bytes == std::vector<uint8_t>({7, 7, 7}))
+            sent = true;
+    EXPECT_TRUE(sent); // 缓存占位音直接下发
+}
+
+// 全失败（A→P 均失败且无缓存）→ 端侧收到 degraded 状态；未就绪占位摘除不堵队首
+TEST_F(Fixture, AllLlmFailedSendsDegradedAndUnblocksQueue) {
+    ConnectAndCalibrate();
+    Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    engine.RunOnce(); // quick submitted
+    auto f1 = Msg(MsgType::kLlmFailed, clock.NowMs());
+    f1.text = "quick"; f1.aux = 0;
+    engine.Inject(std::move(f1));
+    engine.RunOnce(); // → P 段提交
+
+    auto f2 = Msg(MsgType::kLlmFailed, clock.NowMs());
+    f2.text = "quick_placeholder"; f2.aux = 0;
+    engine.Inject(std::move(f2));
+    const auto cs = engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_NE(s, nullptr);
+    EXPECT_TRUE(s->m_playQueue.empty()); // 未就绪占位被摘除（防堵死 B/C）
+    bool degraded = false;
+    for (const auto& w : cs.ws_sends)
+        if (w.is_text &&
+            std::string(w.bytes.begin(), w.bytes.end()).find("degraded") !=
+                std::string::npos)
+            degraded = true;
+    EXPECT_TRUE(degraded);
+
+    // 再次 P 失败 → degraded 每语句只发一次
+    auto f3 = Msg(MsgType::kLlmFailed, clock.NowMs());
+    f3.text = "quick_placeholder"; f3.aux = 0;
+    engine.Inject(std::move(f3));
+    const auto cs2 = engine.RunOnce();
+    EXPECT_TRUE(cs2.ws_sends.empty());
+}
+
+// 打断后迟到的旧代际失败消息 → 忽略，不触发兜底
+TEST_F(Fixture, StaleGenLlmFailedIgnored) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "问题";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    for (int i = 0; i < 10; ++i) { // 打断：uttGen 0→1
+        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
+        v.flags = msgflag::kVoice;
+        engine.Inject(std::move(v));
+    }
+    engine.RunOnce();
+    ASSERT_EQ(engine.Board().FindSession(kSid)->m_uttGen, 1u);
+
+    auto f = Msg(MsgType::kLlmFailed, clock.NowMs());
+    f.text = "quick"; f.aux = 0; // 旧代际
+    engine.Inject(std::move(f));
+    const auto cs = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs, "llm", "quick_placeholder"), 0u);
+    EXPECT_TRUE(cs.ws_sends.empty());
+}
+
 TEST_F(Fixture, OldGenerationMessageDiscarded) {
     ConnectAndCalibrate();
     auto c2 = Msg(MsgType::kWsConnected, clock.NowMs());

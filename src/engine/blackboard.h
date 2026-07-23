@@ -60,6 +60,8 @@ struct SessionContext {
     bool m_uttActive = false;
     bool m_vadEndpoint = false;
     bool m_quickRespSubmitted = false;
+    bool m_aFallbackDone = false;   // A 段失败兜底已触发（每语句一次，防重复占位）
+    bool m_degradedSent = false;    // 全失败 degraded 状态已下发（每语句一次）
     uint64_t m_droppedFramesWm = 0;
     uint64_t m_uttGen = 0;   // 语句代际：打断(barge-in)时 +1，迟到 LLM/TTS 结果丢弃
     int m_voiceRun = 0;      // 连续有声帧计数（APM VAD，打断触发依据）

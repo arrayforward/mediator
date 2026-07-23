@@ -65,6 +65,7 @@
   (data (i32.const 2700) "{\"text\":\"\00")
   (data (i32.const 2712) "\"}\00")
   (data (i32.const 2720) "{\"status\":\"interrupted\"}\00")
+  (data (i32.const 2760) "status:\00")
 
   ;; ================= 基础工具 =================
 
@@ -368,10 +369,18 @@
     (call $send_audio (i32.const 0x12) (i32.const 0) (i32.const 0))
   )
 
-  ;; 引擎下行文本：前缀 "ack:" → function_call
+  ;; 引擎下行文本：前缀 "status:" → status 状态帧（body=剩余 JSON）；
+  ;;              前缀 "ack:" → function_call
   (func (export "on_outbound_text") (param $ptr i32) (param $len i32)
     (local $r i32)
     (if (i32.lt_s (local.get $len) (i32.const 4)) (then (return)))
+    (if (i32.and (i32.ge_s (local.get $len) (i32.const 7))
+                 (call $eq (local.get $ptr) (i32.const 2760) (i32.const 7)))
+      (then
+        (call $send_env (i32.const 2184)
+                        (i32.add (local.get $ptr) (i32.const 7))
+                        (i32.sub (local.get $len) (i32.const 7)))
+        (return)))
     (local.set $r (i32.eq (i32.load8_u (local.get $ptr)) (i32.const 97)))
     (local.set $r (i32.and (local.get $r)
         (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.const 1))) (i32.const 99))))

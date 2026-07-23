@@ -164,6 +164,16 @@ TEST_F(PluginFixture, AckTextMapsToFunctionCall) {
     EXPECT_TRUE(cap.HasTextContaining("emotion"));
 }
 
+TEST_F(PluginFixture, StatusTextMapsToStatusFrame) {
+    plugin.OnOutboundText("status:{\"status\":\"degraded\",\"reason\":\"llm_unavailable\"}");
+    EXPECT_TRUE(cap.HasTextContaining("\"type\":\"status\""));
+    EXPECT_TRUE(cap.HasTextContaining("degraded"));
+    // ack 映射不受 status 分支影响
+    cap.texts.clear();
+    plugin.OnOutboundText("ack:volume_up");
+    EXPECT_TRUE(cap.HasTextContaining("function_call"));
+}
+
 TEST_F(PluginFixture, ThinkingAndLlmTextFrames) {
     plugin.OnThinking();
     EXPECT_TRUE(cap.HasTextContaining("\"status\":\"thinking\""));
