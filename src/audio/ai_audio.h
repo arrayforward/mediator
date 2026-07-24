@@ -53,15 +53,17 @@ public:
         }
         // Silero VAD：0.7s 最小静音断句（普通话句内停顿余量，
         // 0.5s 会把带自然停顿的一句话切成两段→碎片打断正解），
-        // 20s 最大语音强制切分（防 VAD 卡死永不闭合）
+        // 12s 最大语音强制切分（防 VAD 卡死永不闭合；真机会话开始 AGC
+        // 爬坡期噪声把语音概率维持在阈值上，分段 28s 不闭合、首问无
+        // 响应的根因——阈值 0.5→0.55 让弱噪声不再续命语音态）
         SherpaOnnxVadModelConfig vcfg;
         std::memset(&vcfg, 0, sizeof(vcfg));
         vcfg.silero_vad.model = silero_model.c_str();
-        vcfg.silero_vad.threshold = 0.5f;
+        vcfg.silero_vad.threshold = 0.55f;
         vcfg.silero_vad.min_silence_duration = 0.7f;
         vcfg.silero_vad.min_speech_duration = 0.1f;
         vcfg.silero_vad.window_size = 512;
-        vcfg.silero_vad.max_speech_duration = 20.0f;
+        vcfg.silero_vad.max_speech_duration = 12.0f;
         vcfg.sample_rate = 16000;
         vcfg.num_threads = 1;
         vcfg.provider = "cpu";
