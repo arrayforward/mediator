@@ -25,6 +25,7 @@
 #include <poll.h>
 
 #include "audio/align.h"
+#include "audio/despike.h"
 #include "audio/g711.h"
 #include "core/clock.h"
 #include "core/log.h"
@@ -57,14 +58,19 @@ struct WsServer::Conn {
     std::string uid;
     SessionId sid{};
     uint64_t gen = 0;
-    bool calibrated = false;
+    // 标定由内容锚定估计器完成（calib_estimator，下行语音本身做水印），
+    // 接入层不再做特制水印检测——calibrated 恒 true 跳过本层标定路径
+    bool calibrated = true;
     std::vector<int16_t> calib_buf;
     // 协议插件路径（协议解析由 wasm 插件完成，宿主零协议）
     bool use_plugin = false;
     std::unique_ptr<ext::ProtocolPlugin> plugin;
     std::vector<int16_t> calib_buf8k; // 8k 协议侧标定缓冲
     int64_t calib_start_ms = 0; // 首次喂标定缓冲的时间（超时兜底用）
+    int calib_retries = 0;      // 已重试次数（真机首播常被 AGC 爬坡/通道预热吃掉脉冲）
+    size_t calib_detect_len = 0; // 上次跑模板匹配时的缓冲长度（批量检测降 CPU）
     audio::WatermarkDetectResult last_det; // 最近一次检测结果（超时 WARN 诊断用）
+    FILE* raw_dump = nullptr;   // 调试：apk 设备上行原始字节落盘（wasm 前）
 };
 
 namespace {
@@ -72,9 +78,29 @@ SteadyClock g_clock; // 接入层时间戳（引擎内部仍用注入时钟）
 
 // 水印标定超时：超时未命中（无声学回放的设备，如模拟器）降级为 AEC 旁路，
 // 否则标定缓冲无限增长、O(n·m) 检测拖死会话读线程（ping 无 pong 被客户端踢掉）。
-// 6s ≈ 水印时长(0.98s) 6 倍：覆盖 4 脉冲播放 + 真机回环延迟 + 抖动余量；
-// 超时走 kAecBypass 直通（引擎丢帧门已解锁），用户最多等 6 秒
-constexpr int64_t kWmCalibTimeoutMs = 6000;
+// 每轮检测窗 3s（从水印下发时刻起算）：未识别则重发，最多 3 轮；
+// 计时起点由 SendBinary 在水印 clip 下发时重置（连接后延迟首播的场景，
+// 窗内一定覆盖水印播放 + 回环往返）
+constexpr int64_t kWmCalibTimeoutMs = 3000;
+
+// 标定超时重试上限：真机首播常被扬声器 AGC 爬坡/AudioTrack 预热吃掉前几
+// 个脉冲（matched_slots=1），重发时音频通道已热，成功率显著提高；3 轮仍
+// 失败才走 AEC 旁路
+constexpr int kWmCalibMaxRetries = 2;
+
+// 标定失败时落盘上行缓冲（8k PCM16），供离线分析真机上行内容
+// （回声/静音/噪声/硬件 NS 判别）
+void DumpCalibBuf(const std::string& uid, int round, const std::vector<int16_t>& buf) {
+    if (buf.empty()) return;
+    char path[256];
+    std::snprintf(path, sizeof(path),
+                  "/mnt/d/agent/wsl/creek-cluster/crash/calib_%s_r%d_%zu.pcm",
+                  uid.c_str(), round, buf.size());
+    if (FILE* f = std::fopen(path, "wb")) {
+        std::fwrite(buf.data(), sizeof(int16_t), buf.size(), f);
+        std::fclose(f);
+    }
+}
 
 // 会话读循环 poll 轮转出站的等待时长（决定下行帧最坏额外时延）
 constexpr auto kReadPollTimeout = std::chrono::milliseconds(20);
@@ -292,7 +318,8 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
             if (n < 4) continue;
             const uint32_t flags = ReadU32LE(data);
             const std::vector<uint8_t> g711(data + 4, data + n);
-            const auto pcm = audio::DecodeALaw(g711);
+            auto pcm = audio::DecodeALaw(g711);
+            audio::Despike(pcm); // 真机 AGC/削波满幅脉冲（水印 NCC 毒化根因）
 
             MDT_DEBUG("ws frame uid={} flags={} g711_bytes={}", conn->uid, flags,
                       g711.size());
@@ -301,6 +328,21 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
                 const int64_t now = g_clock.NowMs();
                 if (conn->calib_start_ms == 0) conn->calib_start_ms = now;
                 if (now - conn->calib_start_ms > kWmCalibTimeoutMs) {
+                    if (conn->calib_retries < kWmCalibMaxRetries) {
+                        ++conn->calib_retries;
+                        conn->calib_start_ms = 0;
+                        conn->calib_buf.clear();
+                        conn->calib_buf.shrink_to_fit();
+                        conn->calib_buf8k.clear();
+                        conn->calib_buf8k.shrink_to_fit();
+                        MDT_WARN("aec calib timeout uid={} -> retry {}/{} "
+                                 "(ncc={:.3f} peaks={} matched_slots={})",
+                                 conn->uid, conn->calib_retries, kWmCalibMaxRetries,
+                                 conn->last_det.peak_ncc,
+                                 conn->last_det.debug_peaks,
+                                 conn->last_det.debug_matched_slots);
+                        InjectWmRetry(conn); // 引擎重发水印 clip 再测一轮
+                    } else {
                     conn->calibrated = true; // 超时兜底：AEC 旁路
                     conn->calib_buf.clear();
                     conn->calib_buf.shrink_to_fit();
@@ -310,23 +352,29 @@ void WsServer::JwtSessionLoop(std::shared_ptr<Conn> conn) {
                              conn->last_det.debug_peaks,
                              conn->last_det.debug_matched_slots);
                     InjectAecBypass(conn); // 解锁引擎上行丢帧门（AEC 直通）
+                    }
                 } else {
                 conn->calib_buf.insert(conn->calib_buf.end(), pcm.begin(), pcm.end());
-                const auto det = audio::DetectWatermark(conn->calib_buf, m_wmCfg);
-                conn->last_det = det;
-                MDT_DEBUG("wm detect buf={} ncc={:.3f} detected={}",
-                          conn->calib_buf.size(), det.peak_ncc, det.detected);
-                if (det.detected) {
-                    conn->calibrated = true;
-                    MDT_INFO("aec calibrated uid={} delay={} skew={:.6f}", conn->uid,
-                             det.p1, det.skew);
-                    Message w;
-                    w.type = MsgType::kWmDetected;
-                    w.session_id = conn->sid;
-                    w.ts_ms = g_clock.NowMs();
-                    w.aux = det.p1;
-                    w.dval = det.skew;
-                    m_cb.inject(std::move(w));
+                // 批量检测：缓冲每增长 ~0.25s 跑一轮模板匹配（逐帧全量 NCC 太贵；
+                // 阈值必须小于回环水印长度，否则短回环永远凑不够批量）
+                if (conn->calib_buf.size() - conn->calib_detect_len >= 4000) {
+                    conn->calib_detect_len = conn->calib_buf.size();
+                    const auto det = audio::DetectWatermark(conn->calib_buf, m_wmCfg);
+                    conn->last_det = det;
+                    MDT_DEBUG("wm detect buf={} ncc={:.3f} detected={}",
+                              conn->calib_buf.size(), det.peak_ncc, det.detected);
+                    if (det.detected) {
+                        conn->calibrated = true;
+                        MDT_INFO("aec calibrated uid={} delay={} skew={:.6f}", conn->uid,
+                                 det.p1, det.skew);
+                        Message w;
+                        w.type = MsgType::kWmDetected;
+                        w.session_id = conn->sid;
+                        w.ts_ms = g_clock.NowMs();
+                        w.aux = det.p1;
+                        w.dval = det.skew;
+                        m_cb.inject(std::move(w));
+                    }
                 }
                 }
             } else if ((flags & msgflag::kVoice) && m_cb.on_audio) {
@@ -402,7 +450,25 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
         const int64_t now = g_clock.NowMs();
         if (conn->calib_start_ms == 0) conn->calib_start_ms = now;
         if (now - conn->calib_start_ms > kWmCalibTimeoutMs) {
+            if (conn->calib_retries < kWmCalibMaxRetries) {
+                ++conn->calib_retries;
+                DumpCalibBuf(conn->uid, conn->calib_retries, conn->calib_buf8k);
+                conn->calib_start_ms = 0;
+                conn->calib_buf.clear();
+                conn->calib_buf.shrink_to_fit();
+                conn->calib_buf8k.clear();
+                conn->calib_buf8k.shrink_to_fit();
+                MDT_WARN("aec calib timeout uid={} -> retry {}/{} "
+                         "(ncc={:.3f} peaks={} matched_slots={})",
+                         conn->uid, conn->calib_retries, kWmCalibMaxRetries,
+                         conn->last_det.peak_ncc,
+                         conn->last_det.debug_peaks,
+                         conn->last_det.debug_matched_slots);
+                InjectWmRetry(conn); // 引擎重发水印 clip 再测一轮
+                return true;
+            }
             conn->calibrated = true; // 超时兜底：无回声标定，AEC 旁路
+            DumpCalibBuf(conn->uid, 99, conn->calib_buf8k);
             conn->calib_buf8k.clear();
             conn->calib_buf8k.shrink_to_fit();
             MDT_WARN("aec calib timeout uid={} -> bypass aec "
@@ -413,12 +479,21 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
             InjectAecBypass(conn); // 解锁引擎上行丢帧门（AEC 直通）
             return true;
         }
-        // 协议侧 8k 直接检测（模板匹配 16k chirp 降采样后的 0.5k~2k 频带），
-        // 延迟按 8k 采样测得后 ×2 换算回内部 16k
-        const auto pcm = audio::DecodeALaw(std::vector<uint8_t>(data, data + len));
+        // 协议侧 8k 直接检测（叮咚模板匹配），延迟按 8k 采样测得后 ×2 换算回 16k
+        auto pcm = audio::DecodeALaw(std::vector<uint8_t>(data, data + len));
+        audio::Despike(pcm); // 真机 AGC/削波满幅脉冲（水印 NCC 毒化根因）
         conn->calib_buf8k.insert(conn->calib_buf8k.end(), pcm.begin(), pcm.end());
+        // 批量检测：缓冲每增长 ~0.25s 跑一轮模板匹配（逐帧全量 NCC 太贵；
+        // 阈值必须小于回环水印长度，否则短回环永远凑不够批量）
+        if (conn->calib_buf8k.size() - conn->calib_detect_len < 2000) return false;
+        conn->calib_detect_len = conn->calib_buf8k.size();
         const auto det = audio::DetectWatermark(conn->calib_buf8k, m_wmCfg8k);
         conn->last_det = det;
+        int peak = 0;
+        for (const auto s : conn->calib_buf8k) peak = std::max(peak, std::abs(s));
+        MDT_DEBUG("wm detect8k uid={} buf={} peak={} ncc={:.3f} peaks={} margin={} detected={}",
+                  conn->uid, conn->calib_buf8k.size(), peak, det.peak_ncc,
+                  det.debug_peaks, det.debug_matched_slots, det.detected);
         if (!det.detected) return false;
         conn->calibrated = true;
         MDT_INFO("aec calibrated uid={} delay8k={} skew={:.6f}", conn->uid,
@@ -478,11 +553,38 @@ void WsServer::PluginSessionLoop(std::shared_ptr<Conn> conn,
                 continue;
             }
             auto data = static_cast<const uint8_t*>(buf.data().data());
+            // 调试：apk 设备上行原始字节落盘（wasm 前，定位满幅毛刺来源）
+            if (conn->uid.find("apk") != std::string::npos) {
+                if (!conn->raw_dump) {
+                    char p[256];
+                    std::snprintf(p, sizeof(p),
+                                  "/mnt/d/agent/wsl/creek-cluster/crash/uplink_raw_%s.bin",
+                                  conn->uid.c_str());
+                    conn->raw_dump = std::fopen(p, "ab");
+                }
+                if (conn->raw_dump && buf.size() > 4) {
+                    const uint32_t fn = static_cast<uint32_t>(buf.size());
+                    std::fwrite(&fn, 4, 1, conn->raw_dump);
+                    std::fwrite(data, 1, fn, conn->raw_dump);
+                    std::fflush(conn->raw_dump);
+                }
+            }
             conn->plugin->OnWsBinary(data, buf.size());
         }
     } catch (const std::exception& e) {
         MDT_DEBUG("plugin session error: {}", e.what());
     }
+}
+
+void WsServer::InjectWmRetry(const std::shared_ptr<Conn>& conn) {
+    // 标定超时重试：引擎据此重发水印 clip（m_wmPending 保持 true，
+    // 上行帧继续丢弃直到标定成功或重试耗尽走 bypass）
+    Message r;
+    r.type = MsgType::kWmRetry;
+    r.session_id = conn->sid;
+    r.ts_ms = g_clock.NowMs();
+    r.aux = static_cast<int64_t>(conn->gen);
+    m_cb.inject(std::move(r));
 }
 
 void WsServer::InjectAecBypass(const std::shared_ptr<Conn>& conn) {
@@ -503,6 +605,10 @@ void WsServer::CleanupConn(std::shared_ptr<Conn> conn) {
         auto it = m_conns.find(SidHex(conn->sid));
         if (it != m_conns.end() && it->second.get() == conn.get())
             m_conns.erase(it);
+    }
+    if (conn->raw_dump) {
+        std::fclose(conn->raw_dump);
+        conn->raw_dump = nullptr;
     }
     if (!conn->uid.empty()) {
         Message d;
@@ -526,6 +632,14 @@ void WsServer::SendBinary(const SessionId& sid, ClipId clip,
         auto it = m_conns.find(SidHex(sid));
         if (it == m_conns.end()) return;
         conn = it->second;
+    }
+    // 水印 clip 下发时刻 = 标定计时起点（含重发）：每轮 3s 检测窗独立，
+    // 不受"连接早、水印晚发"影响（连接 3s 后才首播水印的调度下必需）
+    if (clip == clip::kWatermark) {
+        conn->calib_start_ms = 0;
+        conn->calib_buf.clear();
+        conn->calib_buf8k.clear();
+        conn->calib_detect_len = 0;
     }
     // 协议插件连接：clip 包装由插件完成
     if (conn->use_plugin) {

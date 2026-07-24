@@ -411,27 +411,30 @@ int main(int argc, char** argv) {
         CHECK(c.WaitText("\"event\":\"connected\"", 3000), "event connected");
         CHECK(c.WaitText("\"status\":\"listening\"", 3000), "status listening");
 
-        // ---- 2. 水印声纹 clip：0x11 + 0x10×N + 0x12，回环播放 ----
+        // ---- 2. 水印声纹 clip：内容锚定方案后服务端不再下发水印，
+        // 3s 内没等到就直接进入语音阶段（旧版服务端才发水印）----
         std::vector<uint8_t> wm;
         bool started = false, ended = false;
-        const auto wm_deadline = steady_clock::now() + milliseconds(5000);
+        const auto wm_deadline = steady_clock::now() + milliseconds(3000);
         while (steady_clock::now() < wm_deadline && !ended) {
-            if (!c.ReadFrame(f, 1000)) break;
+            if (!c.ReadFrame(f, 1000)) continue; // 读超时继续等
             if (f.is_text) continue;
             if (f.hdr.op == cv::AudioOp::kStart) started = true;
             if (started && f.hdr.op == cv::AudioOp::kFrame)
                 wm.insert(wm.end(), f.payload.begin(), f.payload.end());
             if (f.hdr.op == cv::AudioOp::kEnd) ended = true;
         }
-        CHECK(started && ended && wm.size() > 1000, "watermark clip wrapped (start/frames/end)");
-        std::printf("       watermark voiceprint: %zu g711 bytes (双 chirp 声纹)\n", wm.size());
-
-        // 回环：逐 160B 帧上送（标定回声路径）
-        for (size_t off = 0; off < wm.size(); off += 160) {
-            const size_t n = std::min<size_t>(160, wm.size() - off);
-            c.SendAudio(cv::AudioOp::kFrame, {wm.begin() + off, wm.begin() + off + n});
+        if (started && ended && wm.size() > 1000) {
+            std::printf("       watermark voiceprint: %zu g711 bytes\n", wm.size());
+            // 回环：逐 160B 帧上送（标定回声路径）
+            for (size_t off = 0; off < wm.size(); off += 160) {
+                const size_t n = std::min<size_t>(160, wm.size() - off);
+                c.SendAudio(cv::AudioOp::kFrame, {wm.begin() + off, wm.begin() + off + n});
+            }
+            std::this_thread::sleep_for(milliseconds(400)); // 等标定完成
+        } else {
+            std::printf("       no watermark clip (content-anchored calib)\n");
         }
-        std::this_thread::sleep_for(milliseconds(400)); // 等标定完成
 
         // ---- 3. 说话：10 帧语音 + End（真实模式：整段 wav 上送）----
         const auto t_voice = steady_clock::now();

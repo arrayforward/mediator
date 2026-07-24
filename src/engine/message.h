@@ -69,6 +69,8 @@ enum class MsgType : uint16_t {
     kAudioCancel,          // 端侧取消播放（convai AudioOp 0x13 → 打断）
     kLlmFailed,            // LLM RPC 失败/超时（text=method，aux=语句代际）
     kAecBypass,            // 水印标定超时旁路（aux=连接代际）：解锁上行丢帧门，AEC 直通
+    kInterruptVerdict,     // feino 语义打断判定结果（aux: 1=打断 0=丢弃，text=候选 final 文本）
+    kWmRetry,              // 水印标定超时重试（aux=连接代际）：重发水印 clip 再测一轮
 };
 
 // 音频帧 flags

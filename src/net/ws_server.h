@@ -79,6 +79,8 @@ private:
     void CleanupConn(std::shared_ptr<Conn> conn);
     // 标定超时旁路：通知引擎解锁上行丢帧门（AEC 直通，不伪标定）
     void InjectAecBypass(const std::shared_ptr<Conn>& conn);
+    // 标定超时重试：通知引擎重发水印 clip 再测一轮
+    void InjectWmRetry(const std::shared_ptr<Conn>& conn);
     // 出站队列：ssl_stream 不允许跨线程并发 sync read+write，
     // 所有下行写入排队，由会话线程在读超时（20ms）轮转时落盘
     void QueueOutbound(const std::shared_ptr<Conn>& conn, bool is_text,
@@ -101,12 +103,9 @@ private:
     std::unordered_map<std::string, uint64_t> m_genByUid;
 
     audio::WatermarkConfig m_wmCfg;
-    // 协议侧 8k 标定配置：降采样率不改变 Hz 频率，模板 chirp 与原 16k
-    // 一致（1k~4kHz）；延迟按 8k 采样测得后 ×2 换算回内部 16k
-    audio::WatermarkConfig m_wmCfg8k{
-        /*sample_rate*/ 8000, /*chirp_f0*/ 1000.0, /*chirp_f1*/ 4000.0,
-        /*chirp_ms*/ 20, /*gap_ms*/ 320, /*amplitude*/ 0.5,
-        /*ncc_threshold*/ 0.55, /*interval_tolerance_ms*/ 2};
+    // 协议侧 8k 标定配置：降采样率不改变 Hz 频率，叮咚双音与原 16k
+    // 一致（880/1175Hz 均在通带内）；延迟按 8k 采样测得后 ×2 换算回内部 16k
+    audio::WatermarkConfig m_wmCfg8k{/*sample_rate*/ 8000};
 };
 
 } // namespace mediator::net

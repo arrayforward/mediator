@@ -33,6 +33,8 @@ public:
     // ---- 一元调用（同步，调用方负责在线程池执行）----
     std::string LlmGenerate(const std::string& method, const std::string& text,
                             const SessionId& sid);
+    // feino 语义打断判定：RPC 成功返回 true 并写 *interrupt
+    bool InterruptJudge(const std::string& text, const SessionId& sid, bool* interrupt);
     // 返回 PCM16 字节流
     std::string TtsSynth(const std::string& text, ClipId clip, const SessionId& sid);
     std::string BusinessControl(const std::string& cmd, const SessionId& sid);
@@ -46,7 +48,7 @@ public:
                   std::function<void(std::string)> on_partial,
                   std::function<void(std::string)> on_final);
         ~AsrStream();
-        void Write(const std::vector<int16_t>& pcm, uint32_t flags);
+        bool Write(const std::vector<int16_t>& pcm, uint32_t flags);
         void WritesDone();
 
     private:

@@ -48,6 +48,23 @@ std::string GrpcBackend::LlmGenerate(const std::string& method,
     return resp.text();
 }
 
+bool GrpcBackend::InterruptJudge(const std::string& text, const SessionId& sid,
+                                 bool* interrupt) {
+    grpc::ClientContext ctx;
+    ctx.AddMetadata("x-session-id", SidHex(sid));
+    InterruptRequest req;
+    req.set_text(text);
+    req.set_session_id(SidHex(sid));
+    InterruptResponse resp;
+    const auto st = m_llm->JudgeInterrupt(&ctx, req, &resp);
+    if (!st.ok()) {
+        MDT_WARN("llm judge_interrupt rpc failed: {}", st.error_message());
+        return false;
+    }
+    *interrupt = resp.interrupt();
+    return true;
+}
+
 std::string GrpcBackend::TtsSynth(const std::string& text, ClipId clip,
                                   const SessionId& sid) {
     grpc::ClientContext ctx;
@@ -112,11 +129,11 @@ GrpcBackend::AsrStream::~AsrStream() {
     if (m_reader.joinable()) m_reader.join();
 }
 
-void GrpcBackend::AsrStream::Write(const std::vector<int16_t>& pcm, uint32_t flags) {
+bool GrpcBackend::AsrStream::Write(const std::vector<int16_t>& pcm, uint32_t flags) {
     AsrRequest req;
     req.set_pcm(pcm.data(), pcm.size() * sizeof(int16_t));
     req.set_flags(flags);
-    if (!m_stream->Write(req)) MDT_DEBUG("asr stream write failed");
+    return m_stream->Write(req);
 }
 
 void GrpcBackend::AsrStream::WritesDone() { m_stream->WritesDone(); }

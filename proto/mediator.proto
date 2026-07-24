@@ -24,6 +24,7 @@ message AsrResponse {
 // ---- LLM：大模型文本生成（quick/restate/answer/quick_placeholder 共用） ----
 service LlmService {
   rpc Generate(LlmRequest) returns (LlmResponse);
+  rpc JudgeInterrupt(InterruptRequest) returns (InterruptResponse);
 }
 message LlmRequest {
   string method = 1;   // quick / restate / answer / quick_placeholder
@@ -32,6 +33,17 @@ message LlmRequest {
 }
 message LlmResponse {
   string text = 1;
+}
+
+// 打断语义判定：播放/思考期间收到 ASR final，网关不做能量/VAD 判断，
+// 提交本服务按语义决定是否打断（过滤噪声幻听/回声/无意义应声）。
+message InterruptRequest {
+  string text = 1;       // 候选打断文本（ASR final）
+  string session_id = 2;
+}
+message InterruptResponse {
+  bool interrupt = 1;    // true=打断当前回复，文本作为新语句进入流水线
+  string reason = 2;     // 判定理由（日志/观测用）
 }
 
 // ---- TTS：文本转语音 ----

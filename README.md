@@ -72,7 +72,7 @@ third_party/wasm3/
 
 全部模块已落地，**75 单元测试 + 双协议 E2E 全绿**：
 
-- **convai.v1 联调路径（GoldieSettingsAndroid）**：协议全部在 wasm 插件内（核心代码零协议），`--protocol=convai.v1:plugin.wasm --protocol-key=<设备Key>` 配置路由；设备 Key 鉴权、水印声纹首次录音可闻（后续免重标）、8k↔16k 边界重采样、控制指令过 mock gRPC、`bash scripts/run_e2e_convai.sh` 全消息流断言
+- **convai.v1 联调路径（GoldieSettingsAndroid）**：协议全部在 wasm 插件内（核心代码零协议），`--protocol=convai.v1:plugin.wasm --protocol-key=<设备Key>` 配置路由；设备 Key 鉴权、水印声纹每连接标定（delay/skew 随连接失效，重连重标）、8k↔16k 边界重采样、控制指令过 mock gRPC、`bash scripts/run_e2e_convai.sh` 全消息流断言
 - 四阶段心跳引擎 + 三段式音频流水线（安抚/复述/答案 + 场景化占位与复用）
 - WSS(TLS) + **JWT HS256 真实验签** + 调试后门 token（`--allow-debug-token`）
 - **wasm3** 认证扩展 + 观察者消息扩展 + **协议解析插件**（三类角色同一宿主机制）

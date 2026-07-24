@@ -1,10 +1,107 @@
 #include "engine/heartbeat_engine.h"
 
+#include <cstdio>
+
 #include "audio/g711.h"
 #include "audio/watermark.h"
 #include "session/context_evict.h"
 
 namespace mediator {
+
+namespace {
+
+// ---- 回声/碎片判定（AEC 未校准时防自我对话循环）----
+
+// UTF-8 码点迭代（仅判定用，不做严格校验）
+std::vector<uint32_t> DecodeRunes(const std::string& s) {
+    std::vector<uint32_t> out;
+    for (size_t i = 0; i < s.size();) {
+        const auto c = static_cast<unsigned char>(s[i]);
+        uint32_t cp = c;
+        size_t len = 1;
+        if (c >= 0xF0) { cp = c & 0x07; len = 4; }
+        else if (c >= 0xE0) { cp = c & 0x0F; len = 3; }
+        else if (c >= 0xC0) { cp = c & 0x1F; len = 2; }
+        for (size_t k = 1; k < len && i + k < s.size(); ++k)
+            cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3F);
+        out.push_back(cp);
+        i += len;
+    }
+    return out;
+}
+
+// 归一化：仅保留字母/数字/ CJK（去空白、标点、符号）；ASCII 转小写
+std::vector<uint32_t> NormalizeSpeech(const std::string& s) {
+    std::vector<uint32_t> out;
+    for (uint32_t cp : DecodeRunes(s)) {
+        if (cp < 0x80) {
+            if (cp >= 'A' && cp <= 'Z') cp += 32;
+            if ((cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9'))
+                out.push_back(cp);
+            continue;
+        }
+        if (cp >= 0x3000 && cp <= 0x303F) continue; // CJK 标点
+        if (cp >= 0xFF00 && cp <= 0xFF65) continue; // 全角标点
+        out.push_back(cp);
+    }
+    return out;
+}
+
+double BigramJaccard(const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
+    if (a.size() < 2 || b.size() < 2) return 0;
+    auto bigrams = [](const std::vector<uint32_t>& v) {
+        std::unordered_set<uint64_t> set;
+        for (size_t i = 0; i + 1 < v.size(); ++i)
+            set.insert((static_cast<uint64_t>(v[i]) << 32) | v[i + 1]);
+        return set;
+    };
+    const auto sa = bigrams(a), sb = bigrams(b);
+    size_t inter = 0;
+    for (const auto k : sa)
+        if (sb.count(k)) ++inter;
+    return static_cast<double>(inter) / (sa.size() + sb.size() - inter);
+}
+
+bool RunesEqual(const std::vector<uint32_t>& a, const char* b) {
+    return a == DecodeRunes(b);
+}
+
+// 纯应声/感叹碎片：不构成新语句（倾听态回复它无意义，播放期更不应打断）
+bool IsBareInterjection(const std::vector<uint32_t>& norm) {
+    static const char* kInterjections[] = {
+        "嗯", "哦", "啊", "呃", "唉", "唔", "哼", "喂",
+        "嗯嗯", "哦哦", "啊啊", "呃呃",
+        "oah", "ah", "oh", "eh", "hmm", "mhm", "aha", "halo",
+    };
+    if (norm.empty() || norm.size() > 6) return false;
+    for (const char* w : kInterjections)
+        if (RunesEqual(norm, w)) return true;
+    return false;
+}
+
+// 回声：final 与本机最近播报文本高度相似（AEC 旁路时扬声器回放被 mic 收回）
+bool IsEchoOfSpoken(const std::vector<uint32_t>& norm,
+                    const std::vector<std::string>& spoken) {
+    if (norm.size() < 4) return false;
+    for (const auto& sp : spoken) {
+        const auto ns = NormalizeSpeech(sp);
+        if (ns.empty()) continue;
+        // 包含判定（播报长句被部分识别）
+        if (ns.size() >= norm.size()) {
+            bool contained = false;
+            for (size_t off = 0; off + norm.size() <= ns.size() && !contained; ++off) {
+                contained = true;
+                for (size_t i = 0; i < norm.size(); ++i)
+                    if (ns[off + i] != norm[i]) { contained = false; break; }
+            }
+            if (contained) return true;
+        }
+        if (norm.size() >= 6 && BigramJaccard(norm, ns) >= 0.5) return true;
+    }
+    return false;
+}
+
+} // namespace
 
 ChangeSet HeartbeatEngine::RunOnce() {
     ChangeSet cs;
@@ -33,6 +130,24 @@ void HeartbeatEngine::ProcessOne(const Message& m, ChangeSet& cs) {
     case MsgType::kAecBypass: OnAecBypass(m, cs); break;
     case MsgType::kVadUpdate: OnVadUpdate(m, cs); break;
     case MsgType::kAudioCancel: OnAudioCancel(m, cs); break;
+    case MsgType::kInterruptVerdict: OnInterruptVerdict(m, cs); break;
+    case MsgType::kWmRetry: {
+        // 标定超时重试（ws 侧首轮脉冲常被真机 AGC 爬坡/通道预热吃掉）：
+        // 仍在标定期 → 重发水印 clip 再测一轮
+        auto* s = m_board.FindSession(m.session_id);
+        if (s && s->m_wmPending &&
+            static_cast<uint64_t>(m.aux) == s->m_connGeneration) {
+            s->m_wmSendAtMs = 0; // 取消可能未到期的计划发送，防重复下发
+            // 16k 生成（协议插件下行统一抽半 16k→8k），端侧播放与 8k
+            // 检测模板频率/时长一致
+            audio::WatermarkConfig wcfg;
+            const auto pcm = audio::GenerateWatermark(wcfg);
+            cs.ws_sends.push_back(WsOutbound{m.session_id, clip::kWatermark, false,
+                                             audio::EncodeALaw(pcm)});
+            m_board.MarkChanged(m.session_id);
+        }
+        break;
+    }
     case MsgType::kCtxRestored: {
         // Redis 恢复：断线重连后找回聊天上下文
         auto* s = m_board.FindSession(m.session_id);
@@ -79,6 +194,7 @@ void HeartbeatEngine::OnWsConnected(const Message& m, ChangeSet& cs) {
     if (gen > s.m_connGeneration) {
         s.m_aecCalib = SessionContext::AecCalib{};
         s.m_wmPending = false;
+        s.m_wmSendAtMs = 0;
     }
     s.m_connGeneration = gen;
     s.m_uid = m.text;
@@ -90,13 +206,10 @@ void HeartbeatEngine::OnWsConnected(const Message& m, ChangeSet& cs) {
     // 连接建立（含重连）：异步恢复上下文与上一次占位音频（§6.4 断线续聊）
     cs.redis_ops.push_back(RedisOp{"GET", "ctx:" + m.text, "", 0});
     cs.redis_ops.push_back(RedisOp{"GET", "placeholder:" + m.text, "", 0});
-    // 未完成 AEC 标定 → 发水印并进入标定期（上行语音直接丢弃）
-    if (!s.m_aecCalib.valid && !s.m_wmPending) {
-        s.m_wmPending = true;
-        audio::WatermarkConfig wcfg;
-        const auto pcm = audio::GenerateWatermark(wcfg);
-        cs.ws_sends.push_back(WsOutbound{m.session_id, clip::kWatermark, false, audio::EncodeALaw(pcm)});
-    }
+    // AEC 标定走内容锚定（calib_estimator，下行语音本身就是水印），
+    // 不再下发特制水印音；连接即尝试回读该设备的历史标定缓存
+    if (!s.m_aecCalib.valid && !s.m_uid.empty())
+        cs.redis_ops.push_back(RedisOp{"GET", "aeccalib:" + s.m_uid, "", 0});
     m_board.MarkChanged(m.session_id);
 }
 
@@ -113,6 +226,7 @@ void HeartbeatEngine::OnWsDisconnected(const Message& m, ChangeSet& cs) {
     // 重连时由 OnWsConnected 重新下发水印完成每连接标定
     s->m_aecCalib.valid = false;
     s->m_wmPending = false;
+    s->m_wmSendAtMs = 0;
     m_board.MarkChanged(m.session_id);
 }
 
@@ -142,6 +256,56 @@ void HeartbeatEngine::OnAudioFrame(const Message& m, ChangeSet& cs) {
 
 void HeartbeatEngine::OnAsrFinal(const Message& m, ChangeSet& cs) {
     auto& s = m_board.GetOrCreateSession(m.session_id);
+    // 回声/碎片过滤（AEC 未校准时的自我对话根因）：正在播放的文本与最近
+    // 播报文本被 ASR 识别回来的 final 一律丢弃——绝不提交 feino/LLM，
+    // 否则自己和自己说个没完
+    const auto norm = NormalizeSpeech(m.text);
+    std::vector<std::string> spoken(s.m_recentSpoken.begin(), s.m_recentSpoken.end());
+    for (const auto& cl : s.m_playQueue)
+        if (!cl.text.empty()) spoken.push_back(cl.text);
+    if (IsBareInterjection(norm) || IsEchoOfSpoken(norm, spoken)) {
+        cs.board_writes.push_back(
+            BoardMutation{m.session_id, "final_dropped", m.text.substr(0, 64)});
+        return;
+    }
+    // 播放/思考期间收到的 final 是打断候选：网关不做能量/VAD 帧判断，
+    // 提交 feino 语义判定（JudgeInterrupt），kInterruptVerdict 回来后再决定。
+    // 噪声幻听/回声/应声词由此过滤，不再秒杀回复
+    if (s.m_state == SessionState::kThinking || !s.m_playQueue.empty()) {
+        // 回复启动保护窗：同一句话被 VAD 切成两段时，后到的碎片 final
+        // 不得打断刚启动的回复流水线（真机"今天天气如何"被切成
+        // "今天天气如何"+"今天天气"，碎片把正解杀掉的根因）
+        if (s.m_thinkingStartMs > 0 &&
+            m.ts_ms - s.m_thinkingStartMs < 2500) {
+            cs.board_writes.push_back(
+                BoardMutation{m.session_id, "final_dropped",
+                              m.text.substr(0, 64)});
+            return;
+        }
+        cs.grpc_calls.push_back(GrpcCall{"llm", "judge_interrupt", m.session_id,
+                                         clip::kNone, m.text,
+                                         static_cast<int64_t>(s.m_uttGen)});
+        return;
+    }
+    StartUtterance(s, m.text, m.ts_ms, cs);
+}
+
+void HeartbeatEngine::OnInterruptVerdict(const Message& m, ChangeSet& cs) {
+    auto* s = m_board.FindSession(m.session_id);
+    if (!s || s->m_state == SessionState::kOffline) return;
+    if (m.aux == 0) return; // feino 判定不打断（噪声/回声/应声）→ 丢弃该 final
+    // 判定到达时回复可能已播完：仅仍在思考/播放才需要打断动作
+    if (s->m_state == SessionState::kThinking || !s->m_playQueue.empty()) {
+        DoBargeIn(*s, m.ts_ms, cs);
+        // 打断语句已说完（final 即证据）：补偿被 DoBargeIn 复位的断句标志，
+        // 让新语句的 A 段安抚照常触发（与倾听态 final 流程对齐）
+        s->m_vadEndpoint = true;
+    }
+    StartUtterance(*s, m.text, m.ts_ms, cs);
+}
+
+void HeartbeatEngine::StartUtterance(SessionContext& s, const std::string& text,
+                                     int64_t now, ChangeSet& cs) {
     s.m_state = SessionState::kThinking;
     s.m_uttActive = false;
     // 回复新一轮：复位连续有声计数/计时——用户自己的语音不得计入
@@ -149,22 +313,21 @@ void HeartbeatEngine::OnAsrFinal(const Message& m, ChangeSet& cs) {
     // 记录保护窗起点并清开播标记（A 未开播前的保护窗内不取消）
     s.m_voiceRun = 0;
     s.m_voiceRunStartMs = 0;
-    s.m_thinkingStartMs = m.ts_ms;
+    s.m_thinkingStartMs = now;
     s.m_replyStartedMs = 0;
     // 注意：不再清除 m_vadEndpoint —— VAD 帧与 Final 可能同心跳到达，
     // QuickRespTrigger 依赖该标志在本心跳内触发安抚音频（竞态修复）
     // 上下文累积（Redis 持久化走 CtxEvict/同步路径）
-    s.m_chatCtx += "U:" + m.text + "\n";
+    s.m_chatCtx += "U:" + text + "\n";
     // 并行：复述 B + 完整答案 C
-    const int64_t now = m.ts_ms;
     ClipBuffer b; b.id = clip::kRestate; b.requested_ms = now;
     ClipBuffer c; c.id = clip::kAnswer; c.requested_ms = now;
     s.m_playQueue.push_back(std::move(b));
     s.m_playQueue.push_back(std::move(c));
     const int64_t gen = static_cast<int64_t>(s.m_uttGen);
-    cs.grpc_calls.push_back(GrpcCall{"llm", "restate", m.session_id, clip::kRestate, m.text, gen});
-    cs.grpc_calls.push_back(GrpcCall{"llm", "answer", m.session_id, clip::kAnswer, m.text, gen});
-    m_board.MarkChanged(m.session_id);
+    cs.grpc_calls.push_back(GrpcCall{"llm", "restate", s.m_sessionId, clip::kRestate, text, gen});
+    cs.grpc_calls.push_back(GrpcCall{"llm", "answer", s.m_sessionId, clip::kAnswer, text, gen});
+    m_board.MarkChanged(s.m_sessionId);
 }
 
 void HeartbeatEngine::OnLlmText(const Message& m, ChangeSet& cs) {
@@ -193,6 +356,11 @@ void HeartbeatEngine::OnLlmText(const Message& m, ChangeSet& cs) {
         cl->text = m.text;
         cl->text_ready = true;
         EmitTts(*s, id, m.text, cs);
+    }
+    // 记录最近播报文本（回声抑制：AEC 旁路时识别到自己声音的 final 将被丢弃）
+    if (!m.text.empty()) {
+        s->m_recentSpoken.push_back(m.text);
+        while (s->m_recentSpoken.size() > 8) s->m_recentSpoken.pop_front();
     }
     m_board.MarkChanged(m.session_id);
 }
@@ -296,31 +464,17 @@ void HeartbeatEngine::DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs) {
 }
 
 void HeartbeatEngine::OnVadUpdate(const Message& m, ChangeSet& cs) {
+    (void)cs;
     auto* s = m_board.FindSession(m.session_id);
     if (!s || s->m_state == SessionState::kOffline) return;
     if (s->m_wmPending) return; // 标定期不识别
     if (m.flags & msgflag::kVoice) {
         ++s->m_voiceRun;
         if (s->m_voiceRun == 1) s->m_voiceRunStartMs = m.ts_ms; // 连续有声段起点
-        // 打断触发三条件（防误触秒杀回复）：
-        //  1. 连续有声帧数 ≥ barge_in_frames（原有）；
-        //  2. 持续时长 ≥ barge_in_min_voice_ms（0=不启用）——短促噪声/残差只
-        //     记录不取消；真打断语音必然持续，400ms 延迟可接受；
-        //  3. 不在回复启动保护窗内（final 后 A 未开播的 reply_protect_ms 内
-        //     不取消，让回复至少能开播；A 开播或超时后正常）。
-        // 未达阈值前必须保持 kThinking——否则首帧就把状态翻成倾听，
-        // 打断窗口被自己关掉
-        const bool sustained =
-            m_cfg.barge_in_min_voice_ms <= 0 ||
-            (m.ts_ms - s->m_voiceRunStartMs) >= m_cfg.barge_in_min_voice_ms;
-        const bool reply_protected =
-            m_cfg.reply_protect_ms > 0 && s->m_replyStartedMs == 0 &&
-            s->m_thinkingStartMs > 0 &&
-            (m.ts_ms - s->m_thinkingStartMs) < m_cfg.reply_protect_ms;
-        if (s->m_voiceRun >= m_cfg.barge_in_frames && sustained && !reply_protected &&
-            (s->m_state == SessionState::kThinking || !s->m_playQueue.empty())) {
-            DoBargeIn(*s, m.ts_ms, cs); // 内部置 kListening
-        } else if (s->m_state != SessionState::kThinking && s->m_playQueue.empty()) {
+        // 注意：VAD 帧不再触发打断——真机噪声/回声下能量型打断会误杀回复
+        // （6s 周期性误打断根因）。打断统一走 ASR final → feino 语义判定
+        // （OnAsrFinal → judge_interrupt → OnInterruptVerdict）
+        if (s->m_state != SessionState::kThinking && s->m_playQueue.empty()) {
             s->m_state = SessionState::kListening;
         }
         if (!s->m_uttActive) {
@@ -349,13 +503,22 @@ void HeartbeatEngine::OnAudioCancel(const Message& m, ChangeSet& cs) {
 }
 
 void HeartbeatEngine::OnWmDetected(const Message& m, ChangeSet& cs) {
-    (void)cs;
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
     s->m_aecCalib.valid = true;
     s->m_aecCalib.delay_samples = static_cast<int32_t>(m.aux);
     s->m_aecCalib.skew = m.dval;
     s->m_wmPending = false;
+    // 按设备缓存标定结果：真机水印检测常因 AGC 爬坡/回声污染失败，
+    // 同一设备的声学延迟高度稳定（实测 ±60 采样），下次标定失败时
+    // 回读缓存做 AEC（近似延迟远优于完全旁路）
+    if (!s->m_uid.empty()) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%d,%.8f", s->m_aecCalib.delay_samples,
+                      s->m_aecCalib.skew);
+        cs.redis_ops.push_back(
+            RedisOp{"SETEX", "aeccalib:" + s->m_uid, buf, 7 * 24 * 3600});
+    }
     m_board.MarkChanged(m.session_id);
 }
 
@@ -363,11 +526,14 @@ void HeartbeatEngine::OnWmDetected(const Message& m, ChangeSet& cs) {
 // 保持 false（AEC 直通，不是伪标定；APM 不收 SetCalib，render/capture 不
 // 对齐即旁路）。旧代际连接的迟到 bypass（重连已重新进入标定期）不解锁。
 void HeartbeatEngine::OnAecBypass(const Message& m, ChangeSet& cs) {
-    (void)cs;
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
     if (static_cast<uint64_t>(m.aux) < s->m_connGeneration) return;
     s->m_wmPending = false;
+    // 旁路前尝试回读该设备的历史标定（近似延迟做 AEC，优于完全旁路）；
+    // 命中后由网关回注 kWmDetected 落地 calib
+    if (!s->m_aecCalib.valid && !s->m_uid.empty())
+        cs.redis_ops.push_back(RedisOp{"GET", "aeccalib:" + s->m_uid, "", 0});
     m_board.MarkChanged(m.session_id);
 }
 
@@ -465,6 +631,19 @@ void HeartbeatEngine::EnqueueReusePlaceholder(SessionContext& s, ChangeSet& cs) 
     cs.board_writes.push_back(
         BoardMutation{s.m_sessionId, "placeholder_reused", "1"});
     m_board.MarkChanged(s.m_sessionId);
+}
+
+// 到期的计划水印下发（连接后 3s 首播；重试由 kWmRetry 立即下发不经此路）
+void HeartbeatEngine::EvolveWatermarkSend(int64_t now, ChangeSet& cs) {
+    m_board.ForEachSession([&](const SessionId& sid, SessionContext& s) {
+        if (!s.m_wmPending || s.m_wmSendAtMs == 0 || now < s.m_wmSendAtMs) return;
+        s.m_wmSendAtMs = 0;
+        audio::WatermarkConfig wcfg; // 16k 生成（插件下行抽半，见首播处注释）
+        const auto pcm = audio::GenerateWatermark(wcfg);
+        cs.ws_sends.push_back(WsOutbound{sid, clip::kWatermark, false,
+                                         audio::EncodeALaw(pcm)});
+        m_board.MarkChanged(sid);
+    });
 }
 
 void HeartbeatEngine::EvolveSessionGc(int64_t now, ChangeSet& cs) {

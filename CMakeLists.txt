@@ -129,14 +129,21 @@ if(UNIX)
     src/crash/crash_handler.cpp
   )
   target_link_libraries(mediator_net PUBLIC nlohmann_json::nlohmann_json)
+  # sherpa-onnx（GTCRN 降噪 + Silero VAD，AI 音频链）
+  set(SHERPA_ONNX_ROOT /mnt/d/vit/tts/deps/sherpa-onnx-v1.13.4)
   target_include_directories(mediator_net PUBLIC ${PROTO_GEN}
-    ${GRPCPP_INCLUDE_DIRS} ${WEBRTC_APM_INCLUDE_DIRS} ${HIREDIS_INCLUDE_DIRS})
+    ${GRPCPP_INCLUDE_DIRS} ${WEBRTC_APM_INCLUDE_DIRS} ${HIREDIS_INCLUDE_DIRS}
+    ${SHERPA_ONNX_ROOT}/include)
   target_compile_options(mediator_net PUBLIC ${WEBRTC_APM_CFLAGS_OTHER})
   target_link_directories(mediator_net PUBLIC ${GRPCPP_LIBRARY_DIRS}
-    ${WEBRTC_APM_LIBRARY_DIRS} ${HIREDIS_LIBRARY_DIRS})
+    ${WEBRTC_APM_LIBRARY_DIRS} ${HIREDIS_LIBRARY_DIRS}
+    ${SHERPA_ONNX_ROOT}/lib)
   target_link_libraries(mediator_net PUBLIC mediator_core
     ${GRPCPP_LIBRARIES} ${WEBRTC_APM_LIBRARIES} ${HIREDIS_LIBRARIES}
+    sherpa-onnx-c-api onnxruntime
     protobuf ssl crypto pthread)
+  target_link_options(mediator_net PUBLIC
+    "-Wl,-rpath,${SHERPA_ONNX_ROOT}/lib")
 
   add_executable(mediator src/main.cpp)
   target_link_libraries(mediator PRIVATE mediator_net)

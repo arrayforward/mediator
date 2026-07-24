@@ -78,11 +78,15 @@ private:
     void OnTtsChunk(const Message& m, ChangeSet& cs);
     void OnWmDetected(const Message& m, ChangeSet& cs);
     void OnAecBypass(const Message& m, ChangeSet& cs); // 标定超时旁路：解锁丢帧门
-    void OnVadUpdate(const Message& m, ChangeSet& cs);   // 服务端 VAD（含打断检测）
+    void OnVadUpdate(const Message& m, ChangeSet& cs);   // 服务端 VAD（不再做打断判定）
     void OnAudioCancel(const Message& m, ChangeSet& cs); // 端侧取消 → 打断
+    void OnInterruptVerdict(const Message& m, ChangeSet& cs); // feino 语义打断判定结果
     void DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs);
+    void StartUtterance(SessionContext& s, const std::string& text, int64_t now,
+                        ChangeSet& cs); // 开启新一轮回复流水线（B/C 并行）
 
     // 演进组件（单层：只处理 TakeChangedForEvolve 的快照）
+    void EvolveWatermarkSend(int64_t now, ChangeSet& cs); // 到期计划水印下发
     void EvolveQuickResp(SessionContext& s, int64_t now, ChangeSet& cs);
     void EvolvePlayback(SessionContext& s, int64_t now, ChangeSet& cs);
     void EvolveSessionGc(int64_t now, ChangeSet& cs);

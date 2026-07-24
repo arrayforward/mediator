@@ -13,7 +13,10 @@
 // ============================================================================
 #include "gateway.h"
 
+#include <cmath>
+
 #include "audio/apm_wrapper.h"
+#include "audio/despike.h"
 #include "audio/audio_pipeline.h"
 #include "audio/g711.h"
 #include "core/log.h"
@@ -82,6 +85,18 @@ Gateway::Gateway(GatewayConfig cfg)
         if (m.type == MsgType::kWmDetected && m_pipeline) {
             audio::ApmCalib calib{static_cast<int32_t>(m.aux), m.dval};
             m_pipeline->SetCalib(m.session_id, calib);
+        }
+        // 半双工状态跟踪：校准完成→全双工；新连接→回半双工并清空估计器
+        if (m.type == MsgType::kWmDetected || m.type == MsgType::kWsConnected) {
+            std::lock_guard<std::mutex> lk(m_duplexMtx);
+            const auto key = net::SidHex(m.session_id);
+            if (m.type == MsgType::kWmDetected) {
+                m_calibrated[key] = true;
+            } else {
+                m_calibrated[key] = false;
+                m_speakingUntilMs.erase(key);
+                m_calibEst.erase(key);
+            }
         }
         // 协议插件事件通知
         if (m.type == MsgType::kAsrFinal && m_ws) m_ws->NotifyThinking(m.session_id);
@@ -161,6 +176,10 @@ void Gateway::Inject(MsgType type, const SessionId& sid, ClipId clip,
 void Gateway::Dispatch(const ChangeSet& cs) {
     for (const auto& b : cs.board_writes) {
         if (b.field == "session_gc") CleanupSessionResources(b.session_id);
+        // 回声/碎片 final 被引擎丢弃（AEC 未校准防自我对话）
+        if (b.field == "final_dropped")
+            MDT_INFO("asr final dropped (echo/interjection) sid={} text={}",
+                     net::SidHex(b.session_id), b.value);
         // 打断：通知端侧丢弃本地播放缓冲（协议插件转换为状态帧）
         if (b.field == "interrupted" && m_ws) {
             MDT_INFO("barge-in: notify interrupted");
@@ -177,10 +196,19 @@ void Gateway::Dispatch(const ChangeSet& cs) {
                 .MakeCounter("clip_sent_total", "clip=\"" + std::to_string(out.clip_id) + "\"",
                              "audio clips sent to device")
                 .Add();
-        if (out.is_text)
+        if (out.is_text) {
             m_ws->SendText(out.session_id, {out.bytes.begin(), out.bytes.end()});
-        else
+        } else {
+            // 内容锚定校准：下发内容计入 render 时间线（g711 8k 解码）；
+            // 半双工：按字节数累计播放时长（g711 8k：1B=0.125ms）+200ms 尾
+            const auto key = net::SidHex(out.session_id);
+            std::lock_guard<std::mutex> lk(m_duplexMtx);
+            m_calibEst[key].FeedRender(NowMs(), audio::DecodeALaw(out.bytes));
+            auto& until = m_speakingUntilMs[key];
+            until = std::max(until, NowMs()) +
+                    static_cast<int64_t>(out.bytes.size() / 8) + 200;
             m_ws->SendBinary(out.session_id, out.clip_id, out.bytes);
+        }
     }
     for (const auto& op : cs.redis_ops) {
         // GET 类：恢复数据回注引擎；其余异步执行（阶段4，不阻塞心跳）
@@ -197,6 +225,22 @@ void Gateway::Dispatch(const ChangeSet& cs) {
                 else if (op.key.rfind("placeholder:", 0) == 0)
                     Inject(MsgType::kPlaceholderRestored, sid, clip::kPlaceholder, {},
                            {val->begin(), val->end()});
+                else if (op.key.rfind("aeccalib:", 0) == 0) {
+                    // 历史标定回读（"delay16k,skew"）：水印检测失败时用近似
+                    // 延迟做 AEC——远优于完全旁路（回声自我对话根因）
+                    int32_t delay = 0;
+                    double skew = 0.0;
+                    if (std::sscanf(val->c_str(), "%d,%lf", &delay, &skew) == 2 &&
+                        delay > 0) {
+                        if (m_pipeline)
+                            m_pipeline->SetCalib(sid, audio::ApmCalib{delay, skew});
+                        MDT_INFO("aec calib restored from cache sid={} delay16k={} "
+                                 "skew={:.6f}",
+                                  net::SidHex(sid), delay, skew);
+                        // 引擎标记标定有效（单发水印 skew 恒 0，aux=delay16k）
+                        Inject(MsgType::kWmDetected, sid, clip::kNone, {}, {}, delay);
+                    }
+                }
             } else {
                 m_redis->Execute(op);
             }
@@ -225,6 +269,17 @@ void Gateway::ExecGrpcCall(const GrpcCall& call) {
         ~LatencyGuard() { f(); }
     } guard{record_latency};
 
+    if (call.service == "llm" && call.method == "judge_interrupt") {
+        // 语义打断判定：RPC 失败默认不打断（噪声环境下宁丢真打断，不秒杀回复）
+        bool interrupt = false;
+        const bool ok = m_backend->InterruptJudge(call.request_bytes, call.session_id,
+                                                  &interrupt);
+        MDT_INFO("judge_interrupt sid={} ok={} interrupt={} text={}",
+                 net::SidHex(call.session_id), ok, interrupt, call.request_bytes);
+        Inject(MsgType::kInterruptVerdict, call.session_id, clip::kNone,
+               call.request_bytes, {}, (ok && interrupt) ? 1 : 0);
+        return;
+    }
     if (call.service == "llm") {
         const std::string text = m_backend->LlmGenerate(call.method, call.request_bytes,
                                                         call.session_id);
@@ -274,38 +329,106 @@ void Gateway::CleanupSessionResources(const SessionId& sid) {
         std::lock_guard<std::mutex> lk(m_vadMtx);
         m_vad.erase(net::SidHex(sid));
     }
+    {
+        std::lock_guard<std::mutex> lk(m_aiMtx);
+        const auto key = net::SidHex(sid);
+        m_aiChains.erase(key);
+        m_aiInitFailed.erase(key);
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_duplexMtx);
+        const auto key = net::SidHex(sid);
+        m_calibrated.erase(key);
+        m_speakingUntilMs.erase(key);
+        m_calibEst.erase(key);
+    }
+}
+
+int64_t Gateway::NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
 void Gateway::OnAudioToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
                            uint32_t flags) {
     // APM 路径：异步投采集任务，净语音+VAD 回调中写 ASR（会话 FIFO 保序）
     if (m_pipeline) {
-        m_pipeline->PostCapture(sid, pcm, [this, sid, flags](const audio::ApmResult& res) {
-            uint32_t f = flags;
-            if (res.has_voice) f |= msgflag::kVoice; // APM VAD 与端侧 flags 取并集
-            // 服务端 VAD 断句：端侧协议可能不发 End（如 GoldieSettings App），
-            // 有声→连续静音 kVadHangover 帧 → kVadEnd|kAsrEndpoint 触发 ASR final
-            bool endpoint = false;
-            {
-                std::lock_guard<std::mutex> lk(m_vadMtx);
-                auto& st = m_vad[net::SidHex(sid)];
-                if (res.has_voice) {
-                    st.in_speech = true;
-                    st.silence_frames = 0;
-                } else if (st.in_speech && ++st.silence_frames >= kVadHangoverFrames) {
-                    st.in_speech = false;
-                    st.silence_frames = 0;
-                    endpoint = true;
-                }
+        const auto key = net::SidHex(sid);
+        // 内容锚定校准：上行采集进估计器（半双工静音也不阻断——
+        // 校准恰恰需要播放期的回声采集）
+        {
+            std::lock_guard<std::mutex> lk(m_duplexMtx);
+            auto& est = m_calibEst[key];
+            est.FeedCapture(NowMs(), pcm);
+            const auto r = est.TryEstimate(NowMs());
+            if (r.ready && !m_calibrated[key]) {
+                m_calibrated[key] = true;
+                MDT_INFO("aec calibrated (content-anchored) sid={} delay16k={} "
+                         "ncc={:.3f}",
+                         key, r.delay16k, r.ncc);
+                m_pipeline->SetCalib(sid, audio::ApmCalib{r.delay16k, 0.0});
+                // 引擎标记标定有效（顺带按设备缓存，下次连接秒恢复）
+                Inject(MsgType::kWmDetected, sid, clip::kNone, {}, {}, r.delay16k);
             }
-            WriteToAsr(sid, res.pcm.empty() ? std::vector<int16_t>{} : res.pcm, f);
-            uint32_t vf = res.has_voice ? msgflag::kVoice : 0u;
+        }
+        auto clean = pcm;
+        audio::Despike(clean); // 真机 AGC/削波满幅脉冲（VAD/能量门毒化根因）
+        m_pipeline->PostCapture(sid, std::move(clean), [this, sid, flags](const audio::ApmResult& res) {
+            // 半双工（未校准设备）：播放期间上行不送 ASR——回声直灌会形成
+            // 自我对话循环（校准成功后全双工）
+            {
+                std::lock_guard<std::mutex> lk(m_duplexMtx);
+                const auto k = net::SidHex(sid);
+                const auto cal = m_calibrated.find(k);
+                const bool calibrated = cal != m_calibrated.end() && cal->second;
+                const auto sp = m_speakingUntilMs.find(k);
+                if (!calibrated && sp != m_speakingUntilMs.end() &&
+                    NowMs() < sp->second)
+                    return;
+            }
+            // AI 音频链：APM(AEC) 输出 → GTCRN 降噪 → Silero VAD 断句
+            audio::AiAudioChain* chain = nullptr;
+            {
+                std::lock_guard<std::mutex> lk(m_aiMtx);
+                const auto k = net::SidHex(sid);
+                auto& c = m_aiChains[k];
+                if (!c.Valid() && !m_aiInitFailed[k]) {
+                    std::string err;
+                    if (!c.Init(m_cfg.gtcrn_model, m_cfg.silero_model, &err)) {
+                        m_aiInitFailed[k] = true;
+                        MDT_WARN("ai audio chain init failed sid={}: {}", k, err);
+                    } else {
+                        MDT_INFO("ai audio chain ready sid={} (gtcrn+silero)", k);
+                    }
+                }
+                if (c.Valid()) chain = &c;
+            }
+            uint32_t f = flags;
+            uint32_t vf = 0u;
+            bool endpoint = false;
+            std::vector<int16_t> out_pcm = res.pcm;
+            if (chain) {
+                const auto aout = chain->Process(res.pcm);
+                out_pcm = aout.pcm;
+                if (aout.speech) {
+                    f |= msgflag::kVoice;
+                    vf |= msgflag::kVoice;
+                }
+                if (aout.endpoint) {
+                    endpoint = true;
+                    MDT_INFO("vad endpoint (silero)");
+                }
+            } else if (res.has_voice) { // AI 链不可用时退回 APM VAD
+                f |= msgflag::kVoice;
+                vf |= msgflag::kVoice;
+            }
+            WriteToAsr(sid, out_pcm.empty() ? std::vector<int16_t>{} : out_pcm, f);
             if (endpoint) {
-                MDT_INFO("vad endpoint (server-side)");
                 WriteToAsr(sid, {}, f | msgflag::kVadEnd | msgflag::kAsrEndpoint);
                 vf |= msgflag::kVadEnd | msgflag::kAsrEndpoint;
             }
-            // APM VAD 结果注引擎（打断检测/倾听状态机；端侧 flags 不可信，
+            // VAD 结果注引擎（倾听状态机/安抚触发；端侧 flags 不可信，
             // convai 插件每帧都标 kVoice）
             Inject(MsgType::kVadUpdate, sid, clip::kNone, {}, {}, 0, vf);
         });
@@ -316,27 +439,41 @@ void Gateway::OnAudioToAsr(const SessionId& sid, const std::vector<int16_t>& pcm
 
 void Gateway::WriteToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
                          uint32_t flags) {
+    // 空载荷但带断句/端点标志（如 convai AudioOp.End）也必须写流——
+    // mock/真实 ASR 依赖 flags 触发 final
+    if (pcm.empty() && !(flags & (msgflag::kVadEnd | msgflag::kAsrEndpoint)))
+        return;
+    const auto key = net::SidHex(sid);
+    auto open_stream = [this, &sid] {
+        return m_backend->NewAsrStream(
+            sid,
+            [this, sid](std::string text) { // partial：当前仅记录
+                MDT_DEBUG("asr partial: {}", text);
+            },
+            [this, sid](std::string text) { // final → 触发三段式流水线
+                MDT_INFO("asr final: {}", text);
+                Inject(MsgType::kAsrFinal, sid, clip::kNone, std::move(text));
+            });
+    };
     net::GrpcBackend::AsrStream* stream = nullptr;
     {
         std::lock_guard<std::mutex> lk(m_asrMtx);
-        auto& slot = m_asrStreams[net::SidHex(sid)];
-        if (!slot) {
-            slot = m_backend->NewAsrStream(
-                sid,
-                [this, sid](std::string text) { // partial：当前仅记录
-                    MDT_DEBUG("asr partial: {}", text);
-                },
-                [this, sid](std::string text) { // final → 触发三段式流水线
-                    MDT_INFO("asr final: {}", text);
-                    Inject(MsgType::kAsrFinal, sid, clip::kNone, std::move(text));
-                });
-        }
+        auto& slot = m_asrStreams[key];
+        if (!slot) slot = open_stream();
         stream = slot.get();
     }
-    // 空载荷但带断句/端点标志（如 convai AudioOp.End）也必须写流——
-    // mock/真实 ASR 依赖 flags 触发 final
-    if (!pcm.empty() || (flags & (msgflag::kVadEnd | msgflag::kAsrEndpoint)))
-        stream->Write(pcm, flags);
+    if (stream->Write(pcm, flags)) return;
+    // 流已死（后端重启/网格清扫/对端关闭）：丢弃尸体重建一次，
+    // 否则该设备会话永久"变聋"，直到 mediator 重启
+    MDT_WARN("asr stream write failed sid={} -> rebuild stream", key);
+    {
+        std::lock_guard<std::mutex> lk(m_asrMtx);
+        auto& slot = m_asrStreams[key];
+        if (slot.get() == stream) slot = open_stream();
+        stream = slot.get();
+    }
+    if (!stream->Write(pcm, flags))
+        MDT_WARN("asr stream write failed again after rebuild sid={}", key);
 }
 
 } // namespace mediator

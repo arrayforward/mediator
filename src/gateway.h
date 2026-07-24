@@ -15,6 +15,8 @@
 #include <memory>
 #include <string>
 
+#include "audio/ai_audio.h"
+#include "audio/calib_estimator.h"
 #include "core/clock.h"
 #include "core/thread_pool.h"
 #include "engine/heartbeat_engine.h"
@@ -47,6 +49,9 @@ struct GatewayConfig {
     uint16_t metrics_port = 0;                    // /metrics 抓取端点，0=不启动
     std::string observers;                        // wasm 观察者：name:path,name:path
     bool enable_apm = true;                       // WebRTC APM（AECM/NS/VAD）
+    // AI 音频链（GTCRN 降噪 → Silero VAD，替代 APM 的 NS/VAD）
+    std::string gtcrn_model = "/home/hubinix/build/models/gtcrn_simple.onnx";
+    std::string silero_model = "/home/hubinix/build/models/silero_vad.onnx";
     // 协议路由：subproto:plugin.wasm（可多个，逗号分隔；协议全部在插件内）
     std::string protocol_routes;
     std::string protocol_key; // 插件配置槽内容（如设备 Key）
@@ -90,9 +95,25 @@ private:
     struct VadState {
         bool in_speech = false;
         int silence_frames = 0;
+        double noise_rms = 300.0; // 自适应噪声底（能量门限，EMA 跟踪）
     };
     std::mutex m_vadMtx;
     std::unordered_map<std::string, VadState> m_vad;
+
+    // AI 音频链（每会话：GTCRN 降噪 → Silero VAD，替代 webrtc VAD/能量门）
+    std::mutex m_aiMtx;
+    std::unordered_map<std::string, audio::AiAudioChain> m_aiChains;
+    std::unordered_map<std::string, bool> m_aiInitFailed; // 初始化失败标记（防刷屏）
+
+    // 半双工兜底（未校准设备）：AEC 未校准时扬声器回声会直灌 ASR 形成
+    // 自我对话循环。播放期间（按下发 clip 字节数估算时长）上行不送 ASR；
+    // 校准成功（内容锚定估计/缓存恢复）后全双工
+    std::mutex m_duplexMtx;
+    std::unordered_map<std::string, bool> m_calibrated;   // sid hex → 已校准
+    std::unordered_map<std::string, int64_t> m_speakingUntilMs; // sid hex → 播放截止时刻
+    // 内容锚定 AEC 校准估计器（下行语音本身做水印，见 calib_estimator.h）
+    std::unordered_map<std::string, audio::CalibEstimator> m_calibEst;
+    static int64_t NowMs();
 
     // 音频异步管线：每会话一个 APM 实例（actor 模型，CPU 池调度）。
     // APM 与连接上下文绑定，会话 3 分钟超时 GC 时一并清除（session_gc 信号）

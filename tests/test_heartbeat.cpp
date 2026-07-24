@@ -31,15 +31,14 @@ struct Fixture : ::testing::Test {
     EngineConfig cfg;
     HeartbeatEngine engine{cfg, clock};
 
-    // 建立连接并完成水印标定（多数用例的前置）
+    // 建立连接并完成标定（内容锚定方案：不下发水印，标定由估计器完成，
+    // 多数用例的前置）
     void ConnectAndCalibrate() {
         auto c = Msg(MsgType::kWsConnected, clock.NowMs());
         c.text = kUid;
         c.aux = 1; // gen=1
         engine.Inject(std::move(c));
-        auto cs = engine.RunOnce();
-        // 连接即下发水印
-        EXPECT_FALSE(cs.ws_sends.empty());
+        engine.RunOnce();
         auto w = Msg(MsgType::kWmDetected, clock.NowMs());
         w.aux = 4800;   // delay_samples
         w.dval = 1e-4;  // skew
@@ -54,17 +53,23 @@ struct Fixture : ::testing::Test {
         engine.Inject(std::move(f));
     }
 
-    // 持续语音打断：先越过回复保护窗（A 未开播时 2s 生效），再按 50ms
-    // 间隔发有声帧（满足 barge_in_frames 帧数 + barge_in_min_voice_ms
-    // 持续时长双条件；已开播场景保护窗本就不生效，推进时钟无害）
-    void BargeVoice(int frames = 10) {
-        clock.Advance(2100);
-        for (int i = 0; i < frames; ++i) {
-            clock.Advance(50);
-            auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-            v.flags = msgflag::kVoice;
-            engine.Inject(std::move(v));
-        }
+    // 语义打断：播放/思考期收到 ASR final → 引擎发 judge_interrupt 调用
+    // （注入后需 RunOnce 一次），再注入 feino 判定结果（默认允许打断）
+    void SendBargeFinal(const std::string& text = "新问题") {
+        auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+        fin.text = text;
+        engine.Inject(std::move(fin));
+    }
+    void SendVerdict(bool interrupt, const std::string& text = "新问题") {
+        auto v = Msg(MsgType::kInterruptVerdict, clock.NowMs());
+        v.text = text;
+        v.aux = interrupt ? 1 : 0;
+        engine.Inject(std::move(v));
+    }
+    void SemanticBarge(const std::string& text = "新问题") {
+        SendBargeFinal(text);
+        engine.RunOnce(); // → judge_interrupt grpc call
+        SendVerdict(true, text);
     }
 
     static size_t CountGrpc(const ChangeSet& cs, const std::string& svc,
@@ -78,20 +83,24 @@ struct Fixture : ::testing::Test {
 
 // ---- 连接与水印标定 ----
 
-TEST_F(Fixture, ConnectSendsWatermarkAndDropsFrames) {
+// 内容锚定方案：连接不下发任何水印 clip（下行语音本身做校准"水印"）
+TEST_F(Fixture, ConnectSendsNoWatermark) {
     auto c = Msg(MsgType::kWsConnected, clock.NowMs());
     c.text = kUid;
     c.aux = 1;
     engine.Inject(std::move(c));
     const auto cs = engine.RunOnce();
-    ASSERT_EQ(cs.ws_sends.size(), 1u); // 水印下行
+    EXPECT_TRUE(cs.ws_sends.empty());
 
-    Voice(clock.NowMs()); // 标定期语音帧
+    clock.Advance(3000);
+    const auto cs2 = engine.RunOnce();
+    EXPECT_TRUE(cs2.ws_sends.empty()); // 任何时刻都不发水印
+
+    Voice(clock.NowMs());
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_NE(s, nullptr);
-    EXPECT_EQ(s->m_droppedFramesWm, 1u);  // 直接丢弃，不识别
-    EXPECT_FALSE(s->m_uttActive);
+    EXPECT_TRUE(s->m_uttActive); // 无标定期丢帧门，语音直接生效
 }
 
 TEST_F(Fixture, WmDetectedCompletesCalib) {
@@ -364,18 +373,19 @@ TEST_F(Fixture, ReconnectKeepsContextAndRecalibratesAec) {
     EXPECT_EQ(s->m_connGeneration, 2u);
     EXPECT_EQ(s->m_chatCtx, "U:历史\n");       // 上下文保留（断线续聊）
     EXPECT_FALSE(s->m_aecCalib.valid);         // 标定随连接失效，每连接重标
-    EXPECT_TRUE(s->m_wmPending);               // 重新进入标定期
-    ASSERT_EQ(cs.ws_sends.size(), 1u);         // 重发水印
-    EXPECT_EQ(cs.ws_sends[0].clip_id, clip::kWatermark);
+    EXPECT_TRUE(cs.ws_sends.empty());          // 内容锚定：不下发水印
 }
 
-// 标定中途断连：m_wmPending 不得锁存——重连必须重新下发水印
-// （修复前：wmPending 卡 true，后续所有连接不再发水印，AEC 永久旁路）
-TEST_F(Fixture, DisconnectDuringCalibThenReconnectResendsWatermark) {
+// 标定随连接失效：重连后 aecCalib 复位、回读历史标定缓存（内容锚定方案）
+TEST_F(Fixture, ReconnectResetsCalibAndRestoresCache) {
     auto c = Msg(MsgType::kWsConnected, clock.NowMs());
     c.text = kUid; c.aux = 1;
     engine.Inject(std::move(c));
-    engine.RunOnce(); // 下发水印，进入标定期（未完成标定）
+    engine.RunOnce();
+    auto w = Msg(MsgType::kWmDetected, clock.NowMs());
+    w.aux = 4800; w.dval = 0.0;
+    engine.Inject(std::move(w));
+    engine.RunOnce();
 
     auto d = Msg(MsgType::kWsDisconnected, clock.NowMs());
     d.aux = 1;
@@ -383,14 +393,18 @@ TEST_F(Fixture, DisconnectDuringCalibThenReconnectResendsWatermark) {
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_NE(s, nullptr);
-    EXPECT_FALSE(s->m_wmPending); // 断连复位锁存状态
+    EXPECT_FALSE(s->m_aecCalib.valid); // 断连标定失效
 
     auto c2 = Msg(MsgType::kWsConnected, clock.NowMs());
     c2.text = kUid; c2.aux = 2;
     engine.Inject(std::move(c2));
     const auto cs = engine.RunOnce();
-    ASSERT_EQ(cs.ws_sends.size(), 1u); // 重连重新下发水印
-    EXPECT_EQ(cs.ws_sends[0].clip_id, clip::kWatermark);
+    // 重连回读该设备历史标定缓存（GET aeccalib:{uid}）
+    bool get_calib = false;
+    for (const auto& op : cs.redis_ops)
+        if (op.op == "GET" && op.key == "aeccalib:" + std::string(kUid))
+            get_calib = true;
+    EXPECT_TRUE(get_calib);
 }
 
 // 连续重连竞态：旧连接的断连事件晚于新连接的建立到达 → 忽略，
@@ -410,52 +424,7 @@ TEST_F(Fixture, StaleDisconnectIgnoredAfterReconnect) {
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_NE(s, nullptr);
     EXPECT_NE(s->m_state, SessionState::kOffline);
-    EXPECT_TRUE(s->m_wmPending);
     EXPECT_EQ(s->m_connGeneration, 2u);
-}
-
-// ---- 标定超时旁路（kAecBypass：解锁上行丢帧门）----
-
-// 超时 bypass 后上行帧不再被丢：m_wmPending 复位、valid 保持 false（AEC 直通）
-TEST_F(Fixture, AecBypassUnlocksUplinkDropGate) {
-    auto c = Msg(MsgType::kWsConnected, clock.NowMs());
-    c.text = kUid; c.aux = 1;
-    engine.Inject(std::move(c));
-    engine.RunOnce(); // 下发水印，进入标定期
-    Voice(clock.NowMs());
-    engine.RunOnce();
-    const auto* s = engine.Board().FindSession(kSid);
-    ASSERT_NE(s, nullptr);
-    ASSERT_EQ(s->m_droppedFramesWm, 1u); // 标定期丢帧中
-
-    auto b = Msg(MsgType::kAecBypass, clock.NowMs());
-    b.aux = 1; // ws_server 超时注入（aux=连接 gen）
-    engine.Inject(std::move(b));
-    engine.RunOnce();
-    EXPECT_FALSE(s->m_wmPending);      // 丢帧门关闭
-    EXPECT_FALSE(s->m_aecCalib.valid); // AEC 直通（非伪标定）
-
-    Voice(clock.NowMs());
-    engine.RunOnce();
-    EXPECT_EQ(s->m_droppedFramesWm, 1u); // 不再丢帧
-    EXPECT_TRUE(s->m_uttActive);         // 正常进入语句状态机
-}
-
-// 旧代际的迟到 bypass（重连后新连接正在标定）→ 不解锁
-TEST_F(Fixture, StaleGenAecBypassIgnored) {
-    ConnectAndCalibrate();
-    auto c2 = Msg(MsgType::kWsConnected, clock.NowMs());
-    c2.text = kUid; c2.aux = 2;
-    engine.Inject(std::move(c2));
-    engine.RunOnce(); // 新连接 gen=2，重新进入标定期
-    const auto* s = engine.Board().FindSession(kSid);
-    ASSERT_TRUE(s->m_wmPending);
-
-    auto b = Msg(MsgType::kAecBypass, clock.NowMs());
-    b.aux = 1; // 旧 gen=1 连接的迟到超时消息
-    engine.Inject(std::move(b));
-    engine.RunOnce();
-    EXPECT_TRUE(s->m_wmPending); // 新连接标定期不被打扰
 }
 
 // ---- A 段失败兜底（kLlmFailed：A→P→缓存占位→degraded）----
@@ -563,7 +532,7 @@ TEST_F(Fixture, StaleGenLlmFailedIgnored) {
     fin.text = "问题";
     engine.Inject(std::move(fin));
     engine.RunOnce();
-    BargeVoice(); // 打断：uttGen 0→1
+    SemanticBarge(); // 打断：uttGen 0→1
     engine.RunOnce();
     ASSERT_EQ(engine.Board().FindSession(kSid)->m_uttGen, 1u);
 
@@ -648,51 +617,53 @@ TEST_F(Fixture, BargeInClearsQueueAndNotifiesInterrupted) {
     ASSERT_EQ(s->m_playQueue.size(), 2u); // restate + answer
     ASSERT_EQ(s->m_uttGen, 0u);
 
-    // 播放中用户说话：持续有声（帧数+时长双阈值）→ 打断
-    ChangeSet cs;
-    BargeVoice();
-    cs = engine.RunOnce();
-    EXPECT_TRUE(s->m_playQueue.empty());          // 播放队列清空
-    EXPECT_EQ(s->m_uttGen, 1u);                   // 代际 +1
-    EXPECT_EQ(s->m_state, SessionState::kListening); // 回到倾听
-    EXPECT_TRUE(s->m_uttActive);
+    // 播放中收到新 final：不直接打断，先提交 feino 语义判定
+    clock.Advance(2600); // 越过回复启动保护窗
+    SendBargeFinal("新问题");
+    const auto cs1 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs1, "llm", "judge_interrupt"), 1u);
+    EXPECT_EQ(s->m_uttGen, 0u);          // 判定回来前不打断
+    EXPECT_EQ(s->m_playQueue.size(), 2u);
+
+    // feino 判定打断 → 旧队列清空、代际+1、通知端侧、新语句流水线启动
+    SendVerdict(true, "新问题");
+    const auto cs2 = engine.RunOnce();
+    EXPECT_EQ(s->m_uttGen, 1u);                          // 代际 +1
+    EXPECT_EQ(s->m_state, SessionState::kThinking);      // 新语句思考中
+    EXPECT_EQ(s->m_playQueue.size(), 2u);                // 新语句的 B/C
     bool notified = false;
-    for (const auto& b : cs.board_writes)
+    for (const auto& b : cs2.board_writes)
         if (b.field == "interrupted") notified = true;
-    EXPECT_TRUE(notified);                        // 通知端侧丢缓冲
-    // 历史上下文保留（结合历史响应新语音）
+    EXPECT_TRUE(notified);                               // 通知端侧丢缓冲
+    EXPECT_EQ(CountGrpc(cs2, "llm", "restate"), 1u);     // 新语句流水线
+    EXPECT_EQ(CountGrpc(cs2, "llm", "answer"), 1u);
+    for (const auto& g : cs2.grpc_calls) EXPECT_EQ(g.aux, 1); // 新代际
+    // 历史上下文保留并累积新语句（结合历史响应新语音）
     EXPECT_NE(s->m_chatCtx.find("U:问题"), std::string::npos);
+    EXPECT_NE(s->m_chatCtx.find("U:新问题"), std::string::npos);
 }
 
-TEST_F(Fixture, BargeInRequiresSustainedVoice) {
+TEST_F(Fixture, BargeInDeniedByFeinoKeepsReply) {
     ConnectAndCalibrate();
     auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
     fin.text = "问题";
     engine.Inject(std::move(fin));
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_EQ(s->m_playQueue.size(), 2u);
 
-    // 9 帧（低于阈值 10）不触发；中间夹静音帧重置计数与持续计时
-    clock.Advance(2100); // 越过回复保护窗（A 未开播）
-    for (int i = 0; i < 9; ++i) {
-        clock.Advance(50);
-        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-        v.flags = msgflag::kVoice;
-        engine.Inject(std::move(v));
-    }
-    engine.RunOnce();
-    EXPECT_EQ(s->m_playQueue.size(), 2u);
+    // 播放中收到噪声 final（feino 判定不打断）→ 回复不受任何影响
+    clock.Advance(2600); // 越过回复启动保护窗
+    SendBargeFinal("证证证证证证");
+    const auto cs1 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs1, "llm", "judge_interrupt"), 1u);
+    SendVerdict(false, "证证证证证证");
+    const auto cs2 = engine.RunOnce();
     EXPECT_EQ(s->m_uttGen, 0u);
-    auto silence = Msg(MsgType::kVadUpdate, clock.NowMs()); // flags=0
-    engine.Inject(std::move(silence));
-    for (int i = 0; i < 9; ++i) {
-        clock.Advance(50);
-        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-        v.flags = msgflag::kVoice;
-        engine.Inject(std::move(v));
-    }
-    engine.RunOnce();
-    EXPECT_EQ(s->m_uttGen, 0u); // 计数被静音重置，仍不触发
+    EXPECT_EQ(s->m_playQueue.size(), 2u);
+    EXPECT_EQ(s->m_state, SessionState::kThinking);
+    EXPECT_TRUE(cs2.grpc_calls.empty());               // 不发起新流水线
+    EXPECT_EQ(s->m_chatCtx.find("证证"), std::string::npos); // 噪声不入上下文
 }
 
 // 核心回归（真机 final 后 50ms 噪声秒杀回复）：final 复位连续有声计数
@@ -727,9 +698,9 @@ TEST_F(Fixture, NoiseRightAfterFinalDoesNotCancelReply) {
     EXPECT_EQ(s->m_state, SessionState::kThinking);
 }
 
-// A 段保护窗：final 后 A 未开播的 2s 内，即使持续语音也不取消；
-// 保护窗过期后持续语音正常打断
-TEST_F(Fixture, ReplyProtectWindowThenNormalBargeIn) {
+// 能量/VAD 帧打断已移除（真机噪声/回声误杀回复的根因）：无论保护窗内外、
+// 持续多久的有声帧都不得取消回复；打断只走 final → feino 语义判定
+TEST_F(Fixture, VadFramesNeverInterrupt) {
     ConnectAndCalibrate();
     auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
     fin.text = "问题";
@@ -737,32 +708,20 @@ TEST_F(Fixture, ReplyProtectWindowThenNormalBargeIn) {
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
 
-    // 保护窗内：20 帧 × 50ms = 950ms 持续（帧数/时长双阈值均满足，但 A 未开播）
-    for (int i = 0; i < 20; ++i) {
+    clock.Advance(2100); // 越过原回复保护窗
+    for (int i = 0; i < 30; ++i) { // 30 帧 × 50ms = 1.5s 持续有声
         clock.Advance(50);
         auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
         v.flags = msgflag::kVoice;
         engine.Inject(std::move(v));
     }
     engine.RunOnce();
-    EXPECT_EQ(s->m_uttGen, 0u); // 保护窗内不取消
+    EXPECT_EQ(s->m_uttGen, 0u);
     EXPECT_EQ(s->m_playQueue.size(), 2u);
-
-    // 越过保护窗（A 仍未开播）→ 持续语音正常打断
-    clock.Advance(1600); // 距 final 累计 >2s
-    for (int i = 0; i < 10; ++i) {
-        clock.Advance(50);
-        auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
-        v.flags = msgflag::kVoice;
-        engine.Inject(std::move(v));
-    }
-    engine.RunOnce();
-    EXPECT_EQ(s->m_uttGen, 1u);
-    EXPECT_TRUE(s->m_playQueue.empty());
 }
 
-// A 开播即解除保护窗：回复开始播放后（<2s）持续语音正常打断
-TEST_F(Fixture, ReplyStartedUnlocksProtectWindow) {
+// 回复开播后持续有声帧同样不得打断（回声场景：自己的 TTS 被mic收回）
+TEST_F(Fixture, VadFramesDuringPlaybackNeverInterrupt) {
     ConnectAndCalibrate();
     auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
     fin.text = "问题";
@@ -779,14 +738,15 @@ TEST_F(Fixture, ReplyStartedUnlocksProtectWindow) {
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_GT(s->m_replyStartedMs, 0);
 
-    for (int i = 0; i < 10; ++i) { // 持续 450ms，final 后 <2s 但已开播
+    for (int i = 0; i < 30; ++i) {
         clock.Advance(50);
         auto v = Msg(MsgType::kVadUpdate, clock.NowMs());
         v.flags = msgflag::kVoice;
         engine.Inject(std::move(v));
     }
     engine.RunOnce();
-    EXPECT_EQ(s->m_uttGen, 1u);
+    EXPECT_EQ(s->m_uttGen, 0u);
+    EXPECT_FALSE(s->m_playQueue.empty());
 }
 
 TEST_F(Fixture, StaleGenResultsDroppedAfterBargeIn) {
@@ -797,7 +757,7 @@ TEST_F(Fixture, StaleGenResultsDroppedAfterBargeIn) {
     engine.RunOnce();
 
     // 打断：代际 0 → 1
-    BargeVoice();
+    SemanticBarge();
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_EQ(s->m_uttGen, 1u);
@@ -812,7 +772,7 @@ TEST_F(Fixture, StaleGenResultsDroppedAfterBargeIn) {
     engine.Inject(std::move(ta));
     const auto cs = engine.RunOnce();
     EXPECT_EQ(CountGrpc(cs, "tts", "synth"), 0u); // 不为旧文本发起 TTS
-    EXPECT_TRUE(s->m_playQueue.empty());          // 旧音频不入队
+    EXPECT_EQ(s->m_playQueue.size(), 2u);         // 旧音频不入队（仅新语句 B/C）
     EXPECT_TRUE(cs.ws_sends.empty());             // 不下发任何音频
 }
 
@@ -822,22 +782,18 @@ TEST_F(Fixture, NewUtteranceAfterBargeInRunsPipeline) {
     fin.text = "问题一";
     engine.Inject(std::move(fin));
     engine.RunOnce();
-    BargeVoice(); // 打断
-    engine.RunOnce();
-
-    // 新语句：VAD 断句 → 安抚；Final → 复述+答案（均携带新代际 gen=1）
-    auto end = Msg(MsgType::kVadUpdate, clock.NowMs());
-    end.flags = msgflag::kVadEnd | msgflag::kAsrEndpoint;
-    engine.Inject(std::move(end));
-    auto cs1 = engine.RunOnce();
-    EXPECT_EQ(CountGrpc(cs1, "llm", "quick"), 1u);
-    auto fin2 = Msg(MsgType::kAsrFinal, clock.NowMs());
-    fin2.text = "问题二";
-    engine.Inject(std::move(fin2));
+    SemanticBarge("问题二"); // 打断 + 新语句
     const auto cs2 = engine.RunOnce();
+
+    // 打断即开启新语句流水线：复述+答案携带新代际 gen=1
     EXPECT_EQ(CountGrpc(cs2, "llm", "restate"), 1u);
     EXPECT_EQ(CountGrpc(cs2, "llm", "answer"), 1u);
     for (const auto& g : cs2.grpc_calls) EXPECT_EQ(g.aux, 1); // 新代际
+    // A 段安抚由补偿的断句标志触发（与倾听态 final 流程对齐；
+    // 可能在判定心跳或下一心跳演进）
+    const auto cs1 = engine.RunOnce();
+    const size_t quick = CountGrpc(cs2, "llm", "quick") + CountGrpc(cs1, "llm", "quick");
+    EXPECT_EQ(quick, 1u);
     // 新代际(aux=1)结果正常接收
     auto rb = Msg(MsgType::kLlmRestate, clock.NowMs());
     rb.text = "你问的是问题二";
@@ -849,6 +805,81 @@ TEST_F(Fixture, NewUtteranceAfterBargeInRunsPipeline) {
     const auto* s = engine.Board().FindSession(kSid);
     EXPECT_NE(s->m_chatCtx.find("U:问题一"), std::string::npos);
     EXPECT_NE(s->m_chatCtx.find("U:问题二"), std::string::npos);
+}
+
+// 回声抑制：final 与本机最近播报文本相似 → 丢弃（AEC 未校准防自我对话）
+TEST_F(Fixture, EchoFinalDropped) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "今天天气怎么样";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    // B 段文本就绪（播报内容进入 recentSpoken）
+    auto rb = Msg(MsgType::kLlmRestate, clock.NowMs());
+    rb.text = "你问的是今天天气怎么样"; rb.aux = 0;
+    engine.Inject(std::move(rb));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_EQ(s->m_playQueue.size(), 2u);
+
+    // 回声 final（播报内容的片段）→ 丢弃，不打断、不进判定
+    auto echo = Msg(MsgType::kAsrFinal, clock.NowMs());
+    echo.text = "今天天气怎么样";
+    engine.Inject(std::move(echo));
+    const auto cs1 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs1, "llm", "judge_interrupt"), 0u);
+    EXPECT_EQ(s->m_uttGen, 0u);
+    bool dropped = false;
+    for (const auto& b : cs1.board_writes)
+        if (b.field == "final_dropped") dropped = true;
+    EXPECT_TRUE(dropped);
+
+    // 纯应声碎片 → 同样丢弃
+    auto interj = Msg(MsgType::kAsrFinal, clock.NowMs());
+    interj.text = "oah";
+    engine.Inject(std::move(interj));
+    const auto cs2 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs2, "llm", "judge_interrupt"), 0u);
+    EXPECT_EQ(s->m_uttGen, 0u);
+
+    // 真实新语句（与播报无关）→ 正常提交 feino 判定
+    clock.Advance(2600); // 越过回复启动保护窗
+    auto real = Msg(MsgType::kAsrFinal, clock.NowMs());
+    real.text = "明天会下雨吗";
+    engine.Inject(std::move(real));
+    const auto cs3 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs3, "llm", "judge_interrupt"), 1u);
+}
+
+// 回复启动保护窗：同一句话被切成两个 final 时，后到的碎片不得打断
+// 刚启动的回复流水线（真机"今天天气如何"+"今天天气"碎片杀正解的回归）
+TEST_F(Fixture, FragmentFinalWithinProtectWindowDropped) {
+    ConnectAndCalibrate();
+    auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
+    fin.text = "今天天气如何";
+    engine.Inject(std::move(fin));
+    engine.RunOnce();
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_EQ(s->m_state, SessionState::kThinking);
+    ASSERT_EQ(s->m_playQueue.size(), 2u);
+
+    // 2.5s 保护窗内：碎片 final 直接丢弃（不提交 feino 判定、不打断）
+    clock.Advance(700);
+    SendBargeFinal("今天天气");
+    const auto cs1 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs1, "llm", "judge_interrupt"), 0u);
+    EXPECT_EQ(s->m_uttGen, 0u);
+    EXPECT_EQ(s->m_playQueue.size(), 2u);
+    bool dropped = false;
+    for (const auto& b : cs1.board_writes)
+        if (b.field == "final_dropped") dropped = true;
+    EXPECT_TRUE(dropped);
+
+    // 越过保护窗：真实新语句正常提交 feino 判定
+    clock.Advance(2000);
+    SendBargeFinal("明天会下雨吗");
+    const auto cs2 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs2, "llm", "judge_interrupt"), 1u);
 }
 
 TEST_F(Fixture, ClientCancelTriggersBargeIn) {

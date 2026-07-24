@@ -29,42 +29,40 @@
 
 namespace mediator::audio {
 
-// 双音水印标定（§6.5）：chirp 模板生成 + NCC 匹配滤波检测 + 延迟/漂移估计
-// 注：生成侧发出 chirp_count 个等间隔（gap_ms）脉冲，检测端只需识别其中
-//     任意相邻双峰（真机扬声器→麦克风回环损耗大，多脉冲冗余提高命中率；
-//     脉冲越多水印越长越可闻，标定成功率越高）
+// 叮咚水印标定：单发双音铃（叮→咚）模板 + NCC 匹配滤波检测 + 延迟估计。
+// 真机体验优化：原 chirp 扫频脉冲音刺耳，改为门铃式"叮咚"；
+// 抗手机本地降噪：持续纯音是硬件 NS 最易消除的信号（平稳单音），
+// 故双音均采用快速扫频（非平稳，NS/AEC 难以锁定），听感仍为"叮咚"，
+// 自相关性保持 NCC 峰尖锐。单发播放，检测失败按间隔重发。
 struct WatermarkConfig {
     int sample_rate = 16000;
-    double chirp_f0 = 1000.0;     // 起始频率 Hz
-    double chirp_f1 = 4000.0;     // 结束频率 Hz
-    int chirp_ms = 20;            // 单声时长
-    int gap_ms = 320;             // 相邻脉冲固定间隔（起点到起点）。
-                                  // 注：skew 测量分辨率 ≈ 1/间隔采样数，间隔越长
-                                  // 精度越高；320ms@16k=5120采样，配合抛物线
-                                  // 亚采样插值可达 <20ppm（80ms 物理上做不到）
-    double amplitude = 0.9;       // 接近满幅，int16 留 ~10% 余量防削波
-    double ncc_threshold = 0.6;   // 检测阈值
-    int interval_tolerance_ms = 2;
-    int chirp_count = 4;          // 脉冲数（仅生成侧用）：4×320ms → 总时长 0.98s
-                                  // （真机体验优化：原 8 脉冲 2.26s 死窗过长；
-                                  // 投票命中 ≥count-2 且最深槽 ≥count-2 仍拒偏移子序列）
+    double ding_f0 = 1400.0;    // "叮"扫频起点 Hz（G.711A 8k 通带内）
+    double ding_f1 = 1000.0;    // "叮"扫频终点 Hz
+    double dong_f0 = 1000.0;    // "咚"扫频起点 Hz
+    double dong_f1 = 600.0;     // "咚"扫频终点 Hz
+    int ding_ms = 140;          // 叮时长（指数衰减）
+    int tone_gap_ms = 40;       // 两音间隔
+    int dong_ms = 260;          // 咚时长（指数衰减，余音自然）
+    double amplitude = 0.85;    // int16 留 ~15% 余量防削波
+    double ncc_threshold = 0.6; // 检测阈值（模板"叮"前缀自相关 ~0.55，须高于此防截断误判）
+    double min_peak_margin = 0.12; // 主峰需超次峰的余量（抗噪声误检）
 };
 
 struct WatermarkDetectResult {
     bool detected = false;
-    int64_t p1 = 0;          // 第一声峰值采样位置
-    int64_t p2 = 0;          // 第二声峰值采样位置
-    double skew = 0.0;       // 时钟漂移 = 实测间隔/期望间隔 - 1
+    int64_t p1 = 0;          // 峰值采样位置（环路延迟）
+    int64_t p2 = 0;          // 兼容字段（单发水印恒等于 p1）
+    double skew = 0.0;       // 时钟漂移（单发无法测量，恒 0）
     double peak_ncc = 0.0;
-    // 诊断（超时 bypass WARN 用）：NCC 峰数 / 最优候选栅格命中槽数
+    // 诊断（超时 WARN 用）：过阈值峰数 / 主峰-次峰余量(×1000)
     int debug_peaks = 0;
     int debug_matched_slots = 0;
 };
 
-// 生成双 chirp 水印 PCM
+// 生成单发"叮咚"水印 PCM
 std::vector<int16_t> GenerateWatermark(const WatermarkConfig& cfg);
 
-// 在录音 PCM 中检测水印（滑动归一化互相关 + 双峰间隔校验）
+// 在录音 PCM 中检测水印（滑动归一化互相关 + 峰显著性校验）
 WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
                                       const WatermarkConfig& cfg);
 

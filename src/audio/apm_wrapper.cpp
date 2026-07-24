@@ -24,7 +24,9 @@ ApmWrapper::ApmWrapper(ApmCalib calib) : m_calib(calib) {
     m_apm->noise_suppression()->set_level(webrtc::NoiseSuppression::kHigh);
     m_apm->noise_suppression()->Enable(true);
     m_apm->voice_detection()->Enable(true);
-    m_apm->voice_detection()->set_likelihood(webrtc::VoiceDetection::kModerateLikelihood);
+    // 最激进档：真机噪声/AGC 泵起背景下 moderate 会把噪声全程判有声，
+    // 服务端断句永远出不来（回复只能等 60s MaxSegment 强制断句的根因）
+    m_apm->voice_detection()->set_likelihood(webrtc::VoiceDetection::kHighLikelihood);
     // 0.3.1：AGC 开启时每帧必须 set_stream_analog_level，否则 ProcessStream
     // 报 kStreamParameterNotSetError(-11)。网关侧不需要 AGC，直接关闭。
     m_apm->gain_control()->Enable(false);

@@ -76,6 +76,8 @@ struct SessionContext {
         double skew = 0.0;
     } m_aecCalib;
     bool m_wmPending = false; // 水印标定进行中：上行语音直接丢弃
+    int64_t m_wmSendAtMs = 0; // 水印计划下发时刻（连接后延迟首播：等端侧
+                              // 录音通道/AGC 稳定；0=无待发水印）
 
     // 下行播放队列（严格顺序 WM/A/B/C/P）
     std::deque<ClipBuffer> m_playQueue;
@@ -89,6 +91,11 @@ struct SessionContext {
     // 上下文（≤1MB）
     std::string m_chatCtx;
     int64_t m_lastSeenMs = 0;
+
+    // 最近播报文本环形缓冲（≤8 条，A/B/C/P 全量）——回声抑制：
+    // AEC 未校准/旁路时扬声器回放被 mic 收回，ASR 会识别出自己刚播的话，
+    // 与该缓冲高度相似的 final 判定为回声直接丢弃（防自我对话循环）
+    std::deque<std::string> m_recentSpoken;
 };
 
 struct OnlineEntry {

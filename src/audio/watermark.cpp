@@ -9,57 +9,64 @@ namespace mediator::audio {
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 
-std::vector<double> MakeChirp(const WatermarkConfig& cfg) {
-    const int n = cfg.chirp_ms * cfg.sample_rate / 1000;
-    std::vector<double> chirp(n);
-    const double t_total = static_cast<double>(n) / cfg.sample_rate;
-    const double k = (cfg.chirp_f1 - cfg.chirp_f0) / t_total; // 线性扫频斜率
+// 单音：线性扫频 + 5ms 起音斜坡 + 指数衰减（门铃听感，端点无爆音）。
+// 扫频使信号非平稳——手机本地 NS/AEC 专杀平稳纯音，扫频音穿过后
+// 仍保持高自相关（NCC 峰尖锐）
+void AppendSweep(std::vector<double>& out, double f0, double f1, int ms,
+                 double tau_ms, double amplitude, int sample_rate) {
+    const int n = ms * sample_rate / 1000;
+    const int attack = std::min(n, 5 * sample_rate / 1000);
+    const double tau = tau_ms * sample_rate / 1000.0;
+    const double t_total = static_cast<double>(n) / sample_rate;
+    const double k = (f1 - f0) / t_total; // 线性扫频斜率
     for (int i = 0; i < n; ++i) {
-        const double t = static_cast<double>(i) / cfg.sample_rate;
-        const double phase = 2.0 * kPi * (cfg.chirp_f0 * t + 0.5 * k * t * t);
-        // 汉宁窗包络，降低端点不连续
-        const double win = 0.5 * (1.0 - std::cos(2.0 * kPi * i / (n - 1)));
-        chirp[i] = cfg.amplitude * win * std::sin(phase);
+        const double t = static_cast<double>(i) / sample_rate;
+        const double phase = 2.0 * kPi * (f0 * t + 0.5 * k * t * t);
+        const double a = attack > 0 ? std::min(1.0, static_cast<double>(i) / attack) : 1.0;
+        out.push_back(amplitude * a * std::exp(-i / tau) * std::sin(phase));
     }
-    return chirp;
+}
+
+std::vector<double> MakeDingDong(const WatermarkConfig& cfg) {
+    std::vector<double> tmpl;
+    AppendSweep(tmpl, cfg.ding_f0, cfg.ding_f1, cfg.ding_ms, cfg.ding_ms / 2.5,
+                cfg.amplitude, cfg.sample_rate);
+    tmpl.insert(tmpl.end(), cfg.tone_gap_ms * cfg.sample_rate / 1000, 0.0);
+    AppendSweep(tmpl, cfg.dong_f0, cfg.dong_f1, cfg.dong_ms, cfg.dong_ms / 2.5,
+                cfg.amplitude, cfg.sample_rate);
+    return tmpl;
 }
 } // namespace
 
 std::vector<int16_t> GenerateWatermark(const WatermarkConfig& cfg) {
-    const auto chirp = MakeChirp(cfg);
-    const int gap_samples = cfg.gap_ms * cfg.sample_rate / 1000; // 起点到起点
-    const int count = std::max(cfg.chirp_count, 1);
-    const int total = (count - 1) * gap_samples + static_cast<int>(chirp.size());
-    std::vector<int16_t> out(total, 0);
-    // 多脉冲等间隔重复：检测端识别任意相邻双峰即可，冗余提高真机回环命中率
-    for (int k = 0; k < count; ++k)
-        for (size_t i = 0; i < chirp.size(); ++i)
-            out[k * gap_samples + i] = static_cast<int16_t>(chirp[i] * 32767.0);
+    const auto tmpl = MakeDingDong(cfg);
+    std::vector<int16_t> out(tmpl.size());
+    for (size_t i = 0; i < tmpl.size(); ++i)
+        out[i] = static_cast<int16_t>(tmpl[i] * 32767.0);
     return out;
 }
 
 WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
                                       const WatermarkConfig& cfg) {
     WatermarkDetectResult res;
-    const auto chirp = MakeChirp(cfg);
-    const int m = static_cast<int>(chirp.size());
+    const auto tmpl = MakeDingDong(cfg);
+    const int m = static_cast<int>(tmpl.size());
     const int n = static_cast<int>(capture.size());
-    if (n < m * 2) return res;
+    if (n < m + 400) return res; // 模板全长 + 最小滑窗余量
 
     // 模板能量（零均值）
-    double mean_t = std::accumulate(chirp.begin(), chirp.end(), 0.0) / m;
+    double mean_t = std::accumulate(tmpl.begin(), tmpl.end(), 0.0) / m;
     double e_t = 0.0;
     std::vector<double> t0(m);
     for (int i = 0; i < m; ++i) {
-        t0[i] = chirp[i] - mean_t;
+        t0[i] = tmpl[i] - mean_t;
         e_t += t0[i] * t0[i];
     }
     if (e_t <= 0.0) return res;
 
-    // 第一遍：全量滑动 NCC
+    // 全量滑动 NCC
     const int span = n - m;
     std::vector<double> ncc(span + 1, 0.0);
-    double best = 0.0;
     for (int s = 0; s <= span; ++s) {
         double e_x = 0.0, dot = 0.0, mean_x = 0.0;
         for (int i = 0; i < m; ++i) mean_x += capture[s + i];
@@ -71,92 +78,44 @@ WatermarkDetectResult DetectWatermark(const std::vector<int16_t>& capture,
         }
         if (e_x <= 0.0) continue;
         ncc[s] = dot / std::sqrt(e_x * e_t);
-        if (ncc[s] > best) best = ncc[s];
     }
-    res.peak_ncc = best;
 
-    // 第二遍：局部最大值 + 非极大抑制（窗口 m），抛物线插值得到亚采样峰位
-    // —— 直接取"过阈值点"会落在上升沿；且 200ppm 漂移在间隔上不足 1 个采样，
-    //    必须亚采样插值才能达到设计文档 <20ppm 的精度要求。
+    // 过阈值局部峰（非极大抑制，窗口 m），主峰/次峰显著性校验——
+    // 无真实水印时噪声相关峰平缓且多峰接近；真实"叮咚"回环峰尖锐孤立
     struct Peak { double pos; double v; };
     std::vector<Peak> peaks;
-    for (int s = 0; s <= span; ++s) { // 注意覆盖边界：水印可能正好在缓冲起点
+    for (int s = 0; s <= span; ++s) {
         if (ncc[s] < cfg.ncc_threshold) continue;
         const double prev = (s > 0) ? ncc[s - 1] : -1.0;
         const double next = (s < span) ? ncc[s + 1] : -1.0;
-        if (ncc[s] < prev || ncc[s] < next) continue; // 局部最大
-        // 抛物线插值（仅内部点）：顶点 x = 0.5*(y-1 - y+1)/(y-1 - 2y0 + y+1)
-        double off = 0.0;
+        if (ncc[s] < prev || ncc[s] < next) continue;
+        double off = 0.0; // 抛物线亚采样插值
         if (s > 0 && s < span) {
             const double denom = ncc[s - 1] - 2.0 * ncc[s] + ncc[s + 1];
             if (denom != 0.0) off = 0.5 * (ncc[s - 1] - ncc[s + 1]) / denom;
         }
-        if (!peaks.empty() && s - peaks.back().pos < m) { // NMS：留更高者
+        if (!peaks.empty() && s - peaks.back().pos < m) {
             if (ncc[s] > peaks.back().v) peaks.back() = {s + off, ncc[s]};
             continue;
         }
         peaks.push_back({s + off, ncc[s]});
     }
-    if (peaks.size() < 2) return res;
     res.debug_peaks = static_cast<int>(peaks.size());
+    if (peaks.empty()) return res;
+    auto best_it = std::max_element(peaks.begin(), peaks.end(),
+                                    [](const Peak& a, const Peak& b) { return a.v < b.v; });
+    const Peak best = *best_it;
+    peaks.erase(best_it);
+    double second = 0.0;
+    for (const auto& p : peaks) second = std::max(second, p.v);
+    res.peak_ncc = best.v;
+    res.debug_matched_slots = static_cast<int>((best.v - second) * 1000);
+    if (best.v - second < cfg.min_peak_margin) return res;
 
-    const int expect = cfg.gap_ms * cfg.sample_rate / 1000;
-    const int tol = cfg.interval_tolerance_ms * cfg.sample_rate / 1000;
-    // 多脉冲一致性投票（真机误锁回归修复）：旧策略取"首个间隔≈GAP 的相邻
-    // 峰对"，8 脉冲冗余下部分脉冲畸变（扬声器 AGC 爬坡/抢话/回声伪峰）时会
-    // 锁到偏移的脉冲子序列——delay 离群（实测 9503 vs 正常 ~4229）导致 AEC
-    // 延迟线错位、语音被消。现改为：以每个峰为候选首脉冲，在其栅格
-    // p+k*GAP（k=0..count-1）上统计命中峰数，要求命中 ≥ count-2（允许至多
-    // 2 个脉冲缺失/畸变）且最深命中槽 ≥ count-2（尾槽或次尾槽在位）——
-    // 偏移子序列的最深槽到不了 count-2，仍被拒；尾槽在位要求同时把检测触发
-    // 点压到水印末尾（尾脉冲真机不稳定，放宽到次尾槽后残留尾巴 ≤1 脉冲，
-    // 不会毒化 ASR 流——sim 回归根因）。
-    const int count = std::max(cfg.chirp_count, 2);
-    const int need = std::max(2, count - 2);
-    int best_matched = 0, best_last_k = -1;
-    double best_p1 = 0.0;
-    std::vector<double> best_slots;
-    for (size_t c = 0; c < peaks.size(); ++c) {
-        std::vector<double> slots(count, -1.0);
-        int matched = 0, last_k = -1;
-        for (const auto& pk : peaks) {
-            const double rel = pk.pos - peaks[c].pos;
-            const long k = std::lround(rel / expect);
-            if (k < 0 || k >= count) continue;
-            if (std::abs(rel - static_cast<double>(k) * expect) > tol) continue;
-            if (slots[k] < 0.0) {
-                slots[k] = pk.pos;
-                ++matched;
-                if (k > last_k) last_k = static_cast<int>(k);
-            }
-        }
-        if (matched > best_matched ||
-            (matched == best_matched && last_k > best_last_k)) {
-            best_matched = matched;
-            best_last_k = last_k;
-            best_p1 = peaks[c].pos;
-            best_slots = std::move(slots);
-        }
-    }
-    res.debug_matched_slots = best_matched;
-    if (best_matched < need || best_last_k < count - 2) return res;
-
-    // skew：相邻命中槽间隔序列取中位数（抗单个脉冲畸变/伪峰）
-    std::vector<double> iv;
-    for (int k = 0; k + 1 < count; ++k)
-        if (best_slots[k] >= 0.0 && best_slots[k + 1] >= 0.0)
-            iv.push_back(best_slots[k + 1] - best_slots[k]);
-    double med = expect;
-    if (!iv.empty()) {
-        std::sort(iv.begin(), iv.end());
-        med = iv[iv.size() / 2];
-    }
     res.detected = true;
-    res.p1 = static_cast<int64_t>(std::llround(best_p1));
-    res.p2 = static_cast<int64_t>(
-        std::llround(best_slots.size() > 1 && best_slots[1] >= 0.0 ? best_slots[1]
-                                                                   : best_p1 + expect));
-    res.skew = med / expect - 1.0;
+    res.p1 = static_cast<int64_t>(std::llround(best.pos));
+    res.p2 = res.p1;
+    res.skew = 0.0; // 单发水印不测漂移（实测值 <70ppm，对 AEC 无影响）
     return res;
 }
 
