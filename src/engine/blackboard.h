@@ -68,6 +68,7 @@ struct SessionContext {
     int64_t m_voiceRunStartMs = 0; // 当前连续有声段起点（打断最短持续计时）
     int64_t m_thinkingStartMs = 0; // 最近一次 AsrFinal 时刻（回复保护窗起点）
     int64_t m_replyStartedMs = 0;  // 回复开播时刻（首个非占位 clip 下发；0=未开播）
+    int64_t m_lastBargeMs = 0;     // 最近一次打断时刻（端侧重复 cancel 去重窗口）
 
     // AEC 标定（§6.5）
     struct AecCalib {
@@ -87,6 +88,16 @@ struct SessionContext {
     // 占位音频复用缓存（上一次对话的占位提示音）
     ClipBuffer m_lastPlaceholder;
     bool m_hasLastPlaceholder = false;
+
+    // A 段安抚音缓存：quick 触发时 0 等待复用播出；LLM quick 结果异步
+    // 刷新（kSootheCache 合成），供下一次使用。m_prevSootheText 记录上次
+    // 实际播出的承接语，避免连续两次完全相同
+    ClipBuffer m_lastSoothe;
+    bool m_hasLastSoothe = false;
+    uint32_t m_sootheIdx = 0;        // 默认承接语轮换序号
+    std::string m_prevSootheText;    // 上一次播出的承接语
+    bool m_uttAsrConfirmed = false;  // 当前语句已被 ASR 确认有真实语音
+                                     // （partial/final 非空；quick 触发门）
 
     // 上下文（≤1MB）
     std::string m_chatCtx;

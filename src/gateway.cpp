@@ -180,6 +180,14 @@ void Gateway::Dispatch(const ChangeSet& cs) {
         if (b.field == "final_dropped")
             MDT_INFO("asr final dropped (echo/interjection) sid={} text={}",
                      net::SidHex(b.session_id), b.value);
+        // 打断来源追踪（真机双打断杀新语句问题定位）
+        if (b.field == "barge_src")
+            MDT_INFO("barge-in source sid={} src={}",
+                     net::SidHex(b.session_id), b.value);
+        // 旧代际 LLM 结果丢弃（TTS 未收到的直接证据）
+        if (b.field == "llm_stale_drop")
+            MDT_WARN("llm result dropped (stale gen) sid={} text={}",
+                     net::SidHex(b.session_id), b.value);
         // 打断：通知端侧丢弃本地播放缓冲（协议插件转换为状态帧）
         if (b.field == "interrupted" && m_ws) {
             MDT_INFO("barge-in: notify interrupted");
@@ -447,8 +455,10 @@ void Gateway::WriteToAsr(const SessionId& sid, const std::vector<int16_t>& pcm,
     auto open_stream = [this, &sid] {
         return m_backend->NewAsrStream(
             sid,
-            [this, sid](std::string text) { // partial：当前仅记录
+            [this, sid](std::string text) { // partial → 引擎 ASR 确认门（quick 触发依据）
                 MDT_DEBUG("asr partial: {}", text);
+                if (!text.empty())
+                    Inject(MsgType::kAsrPartial, sid, clip::kNone, std::move(text));
             },
             [this, sid](std::string text) { // final → 触发三段式流水线
                 MDT_INFO("asr final: {}", text);

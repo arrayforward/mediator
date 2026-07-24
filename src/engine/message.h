@@ -43,6 +43,7 @@ constexpr ClipId kSoothe = 2;      // 安抚音频（概念 A）
 constexpr ClipId kRestate = 3;     // 复述音频（概念 B）
 constexpr ClipId kAnswer = 4;      // 答案音频（概念 C）
 constexpr ClipId kPlaceholder = 5; // 场景化占位音
+constexpr ClipId kSootheCache = 6; // A 段缓存刷新合成（不进播放队列，仅沉淀缓存）
 } // namespace clip
 
 enum class MsgType : uint16_t {

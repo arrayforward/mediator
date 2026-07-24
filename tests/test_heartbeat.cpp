@@ -53,23 +53,25 @@ struct Fixture : ::testing::Test {
         engine.Inject(std::move(f));
     }
 
-    // 语义打断：播放/思考期收到 ASR final → 引擎发 judge_interrupt 调用
-    // （注入后需 RunOnce 一次），再注入 feino 判定结果（默认允许打断）
-    void SendBargeFinal(const std::string& text = "新问题") {
+    // ASR partial：确认当前语句有真实语音（quick 触发门）
+    void AsrPartial(const std::string& text = "你在说什么") {
+        auto p = Msg(MsgType::kAsrPartial, clock.NowMs());
+        p.text = text;
+        engine.Inject(std::move(p));
+    }
+
+    // 语义打断：播放/思考期收到 ASR final → 引擎本地判定（原 feino
+    // JudgeInterrupt 规则已挪回 mediator，不再发 judge_interrupt 调用），
+    // 有意义文本立即打断 + 启动新语句流水线
+    void SendBargeFinal(const std::string& text = "新的问题") {
         auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
         fin.text = text;
         engine.Inject(std::move(fin));
     }
-    void SendVerdict(bool interrupt, const std::string& text = "新问题") {
-        auto v = Msg(MsgType::kInterruptVerdict, clock.NowMs());
-        v.text = text;
-        v.aux = interrupt ? 1 : 0;
-        engine.Inject(std::move(v));
-    }
-    void SemanticBarge(const std::string& text = "新问题") {
+    ChangeSet SemanticBarge(const std::string& text = "新的问题") {
+        clock.Advance(2600); // 越过回复启动保护窗
         SendBargeFinal(text);
-        engine.RunOnce(); // → judge_interrupt grpc call
-        SendVerdict(true, text);
+        return engine.RunOnce(); // 本地判定通过 → 立即打断
     }
 
     static size_t CountGrpc(const ChangeSet& cs, const std::string& svc,
@@ -126,17 +128,25 @@ TEST_F(Fixture, WmDetectedCompletesCalib) {
 TEST_F(Fixture, QuickRespTriggersAfter5s) {
     ConnectAndCalibrate();
     Voice(clock.NowMs());
+    AsrPartial(); // ASR 确认有真实语音
     engine.RunOnce(); // 说话开始
     clock.Advance(5001);
     Voice(clock.NowMs());
     const auto cs = engine.RunOnce(); // 演进：>5s → llm quick
     EXPECT_EQ(CountGrpc(cs, "llm", "quick"), 1u);
+    // 无缓存：默认承接语立即入队并合成（不等 LLM）
+    EXPECT_EQ(CountGrpc(cs, "tts", "synth"), 1u);
+    const auto* s = engine.Board().FindSession(kSid);
+    ASSERT_FALSE(s->m_playQueue.empty());
+    EXPECT_EQ(s->m_playQueue.front().id, clip::kSoothe);
+    EXPECT_TRUE(s->m_playQueue.front().text_ready);
 }
 
 TEST_F(Fixture, QuickRespTriggersOnVadEnd) {
     ConnectAndCalibrate();
     clock.Advance(1000); // 不足 5s
     Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
     const auto cs = engine.RunOnce();
     EXPECT_EQ(CountGrpc(cs, "llm", "quick"), 1u);
 }
@@ -145,19 +155,101 @@ TEST_F(Fixture, QuickRespTriggersOnAsrEndpoint) {
     ConnectAndCalibrate();
     clock.Advance(1000);
     Voice(clock.NowMs(), msgflag::kVoice | msgflag::kAsrEndpoint);
+    AsrPartial();
     const auto cs = engine.RunOnce();
     EXPECT_EQ(CountGrpc(cs, "llm", "quick"), 1u);
+}
+
+// 噪声门：纯噪声 VAD 段（ASR 无确认）不触发 quick（真机噪声 long_utt
+// 误触发安抚的根因回归）
+TEST_F(Fixture, QuickRespNotTriggeredWithoutAsrConfirmation) {
+    ConnectAndCalibrate();
+    Voice(clock.NowMs());
+    engine.RunOnce();
+    clock.Advance(5001);
+    Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    const auto cs = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs, "llm", "quick"), 0u);
+    EXPECT_TRUE(engine.Board().FindSession(kSid)->m_playQueue.empty());
 }
 
 TEST_F(Fixture, QuickRespSubmittedOnlyOnce) {
     ConnectAndCalibrate();
     clock.Advance(1000);
     Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
     engine.RunOnce();
     clock.Advance(6000);
     Voice(clock.NowMs());
+    AsrPartial();
     const auto cs = engine.RunOnce(); // 已提交过，不再重复
     EXPECT_EQ(CountGrpc(cs, "llm", "quick"), 0u);
+}
+
+// 有 A 段缓存：0 等待复用播出（不发 TTS）；LLM 结果只刷新缓存不插队
+TEST_F(Fixture, QuickPlaysCachedSootheAndLlmRefreshesCache) {
+    ConnectAndCalibrate();
+    auto* s = engine.Board().FindSession(kSid);
+    ClipBuffer cached;
+    cached.id = clip::kSoothe;
+    cached.text = "嗯嗯，我在听，你慢慢说。";
+    cached.text_ready = true;
+    cached.g711 = {5, 5, 5};
+    cached.audio_ready = true;
+    s->m_lastSoothe = cached;
+    s->m_hasLastSoothe = true;
+
+    Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
+    const auto cs = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs, "llm", "quick"), 1u);   // LLM 照常提交（刷新缓存）
+    EXPECT_EQ(CountGrpc(cs, "tts", "synth"), 0u);   // 缓存播出无需合成
+    ASSERT_FALSE(cs.ws_sends.empty());              // 缓存音本心跳即下发
+    EXPECT_EQ(cs.ws_sends[0].bytes, (std::vector<uint8_t>{5, 5, 5}));
+
+    // LLM 结果到达：不插队播放，单独合成刷新缓存（kSootheCache）
+    auto qa = Msg(MsgType::kLlmQuickResp, clock.NowMs());
+    qa.text = "好的，我在呢，你接着说。"; qa.aux = 0;
+    engine.Inject(std::move(qa));
+    const auto cs2 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs2, "tts", "synth"), 1u);
+    bool cacheSynth = false;
+    for (const auto& g : cs2.grpc_calls)
+        if (g.service == "tts" && g.clip_id == clip::kSootheCache) cacheSynth = true;
+    EXPECT_TRUE(cacheSynth);
+    EXPECT_TRUE(cs2.ws_sends.empty()); // 不播出
+    // 缓存音频回填
+    auto tc = Msg(MsgType::kTtsAudioChunk, clock.NowMs());
+    tc.clip_id = clip::kSootheCache; tc.payload = {8, 8}; tc.aux = 0;
+    engine.Inject(std::move(tc));
+    engine.RunOnce();
+    const auto* s2 = engine.Board().FindSession(kSid);
+    EXPECT_EQ(s2->m_lastSoothe.text, "好的，我在呢，你接着说。");
+    EXPECT_EQ(s2->m_lastSoothe.g711, (std::vector<uint8_t>{8, 8}));
+    EXPECT_TRUE(s2->m_lastSoothe.audio_ready);
+}
+
+// 缓存与上次播出相同 → 跳过缓存走默认语料轮换（避免每次完全一样）
+TEST_F(Fixture, QuickSkipsCacheWhenSameAsPrevAndRotates) {
+    ConnectAndCalibrate();
+    auto* s = engine.Board().FindSession(kSid);
+    ClipBuffer cached;
+    cached.id = clip::kSoothe;
+    cached.text = "嗯嗯，我在听呢，你慢慢说。";
+    cached.text_ready = true;
+    cached.g711 = {5, 5, 5};
+    cached.audio_ready = true;
+    s->m_lastSoothe = cached;
+    s->m_hasLastSoothe = true;
+    s->m_prevSootheText = cached.text; // 上次刚播过这句
+
+    Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
+    const auto cs = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs, "tts", "synth"), 1u); // 默认语料合成
+    const auto* s2 = engine.Board().FindSession(kSid);
+    ASSERT_FALSE(s2->m_playQueue.empty());
+    EXPECT_NE(s2->m_playQueue.front().text, cached.text); // 不与上次重复
 }
 
 // ---- 三段式流水线 ----
@@ -199,18 +291,16 @@ TEST_F(Fixture, LlmTextTriggersTtsPerClip) {
 
 TEST_F(Fixture, PlaybackOrderSootheRestateAnswer) {
     ConnectAndCalibrate();
-    Voice(clock.NowMs());
-    engine.RunOnce();
+    Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
+    const auto cs0 = engine.RunOnce(); // quick：默认承接语立即入队 + 合成
+    ASSERT_EQ(CountGrpc(cs0, "tts", "synth"), 1u);
     auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
     fin.text = "问题";
     engine.Inject(std::move(fin));
-    engine.RunOnce();
+    engine.RunOnce(); // B/C 入队于安抚之后
 
-    // 安抚文本与音频先就绪
-    auto qa = Msg(MsgType::kLlmQuickResp, clock.NowMs());
-    qa.text = "嗯我想想";
-    engine.Inject(std::move(qa));
-    engine.RunOnce();
+    // 安抚音频就绪（默认承接语的 TTS 返回）
     auto ta = Msg(MsgType::kTtsAudioChunk, clock.NowMs());
     ta.clip_id = clip::kSoothe;
     ta.payload = {1, 2, 3};
@@ -433,6 +523,7 @@ TEST_F(Fixture, StaleDisconnectIgnoredAfterReconnect) {
 TEST_F(Fixture, QuickFailureTriggersPlaceholderFallback) {
     ConnectAndCalibrate();
     Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
     const auto cs1 = engine.RunOnce(); // 断句触发 llm quick
     ASSERT_EQ(CountGrpc(cs1, "llm", "quick"), 1u);
 
@@ -478,6 +569,7 @@ TEST_F(Fixture, QuickFailureWithCacheReusesPlaceholder) {
     s0->m_hasLastPlaceholder = true;
 
     Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
     engine.RunOnce();
     auto f = Msg(MsgType::kLlmFailed, clock.NowMs());
     f.text = "quick"; f.aux = 0;
@@ -496,6 +588,7 @@ TEST_F(Fixture, QuickFailureWithCacheReusesPlaceholder) {
 TEST_F(Fixture, AllLlmFailedSendsDegradedAndUnblocksQueue) {
     ConnectAndCalibrate();
     Voice(clock.NowMs(), msgflag::kVoice | msgflag::kVadEnd);
+    AsrPartial();
     engine.RunOnce(); // quick submitted
     auto f1 = Msg(MsgType::kLlmFailed, clock.NowMs());
     f1.text = "quick"; f1.aux = 0;
@@ -508,7 +601,8 @@ TEST_F(Fixture, AllLlmFailedSendsDegradedAndUnblocksQueue) {
     const auto cs = engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_NE(s, nullptr);
-    EXPECT_TRUE(s->m_playQueue.empty()); // 未就绪占位被摘除（防堵死 B/C）
+    // 未就绪占位被摘除（防堵死 B/C；默认承接语 clip 仍在队中正常待播）
+    for (const auto& cl : s->m_playQueue) EXPECT_NE(cl.id, clip::kPlaceholder);
     bool degraded = false;
     for (const auto& w : cs.ws_sends)
         if (w.is_text &&
@@ -589,6 +683,9 @@ TEST_F(Fixture, DeterministicReplay) {
         Message f; f.type = MsgType::kWsAudioFrame; f.session_id = kSid;
         f.flags = msgflag::kVoice | msgflag::kVadEnd; f.ts_ms = clk.NowMs();
         e.Inject(std::move(f));
+        Message p; p.type = MsgType::kAsrPartial; p.session_id = kSid;
+        p.text = "你在说什么"; p.ts_ms = clk.NowMs();
+        e.Inject(std::move(p));
         return e.RunOnce(); // 应触发 quick
     };
     VirtualClock c1{5000}, c2{5000};
@@ -617,20 +714,15 @@ TEST_F(Fixture, BargeInClearsQueueAndNotifiesInterrupted) {
     ASSERT_EQ(s->m_playQueue.size(), 2u); // restate + answer
     ASSERT_EQ(s->m_uttGen, 0u);
 
-    // 播放中收到新 final：不直接打断，先提交 feino 语义判定
+    // 播放中收到有意义新 final：本地判定为真打断 → 旧队列清空、
+    // 代际+1、通知端侧、新语句流水线启动（同一心跳内完成，无 RPC 往返）
     clock.Advance(2600); // 越过回复启动保护窗
-    SendBargeFinal("新问题");
-    const auto cs1 = engine.RunOnce();
-    EXPECT_EQ(CountGrpc(cs1, "llm", "judge_interrupt"), 1u);
-    EXPECT_EQ(s->m_uttGen, 0u);          // 判定回来前不打断
-    EXPECT_EQ(s->m_playQueue.size(), 2u);
-
-    // feino 判定打断 → 旧队列清空、代际+1、通知端侧、新语句流水线启动
-    SendVerdict(true, "新问题");
+    SendBargeFinal("新的问题");
     const auto cs2 = engine.RunOnce();
+    EXPECT_EQ(CountGrpc(cs2, "llm", "judge_interrupt"), 0u); // 本地判定，无 RPC
     EXPECT_EQ(s->m_uttGen, 1u);                          // 代际 +1
     EXPECT_EQ(s->m_state, SessionState::kThinking);      // 新语句思考中
-    EXPECT_EQ(s->m_playQueue.size(), 2u);                // 新语句的 B/C
+    EXPECT_EQ(s->m_playQueue.size(), 3u);                // 默认承接语 A + 新语句的 B/C
     bool notified = false;
     for (const auto& b : cs2.board_writes)
         if (b.field == "interrupted") notified = true;
@@ -640,10 +732,10 @@ TEST_F(Fixture, BargeInClearsQueueAndNotifiesInterrupted) {
     for (const auto& g : cs2.grpc_calls) EXPECT_EQ(g.aux, 1); // 新代际
     // 历史上下文保留并累积新语句（结合历史响应新语音）
     EXPECT_NE(s->m_chatCtx.find("U:问题"), std::string::npos);
-    EXPECT_NE(s->m_chatCtx.find("U:新问题"), std::string::npos);
+    EXPECT_NE(s->m_chatCtx.find("U:新的问题"), std::string::npos);
 }
 
-TEST_F(Fixture, BargeInDeniedByFeinoKeepsReply) {
+TEST_F(Fixture, BargeInDeniedByLocalJudgeKeepsReply) {
     ConnectAndCalibrate();
     auto fin = Msg(MsgType::kAsrFinal, clock.NowMs());
     fin.text = "问题";
@@ -652,18 +744,29 @@ TEST_F(Fixture, BargeInDeniedByFeinoKeepsReply) {
     const auto* s = engine.Board().FindSession(kSid);
     ASSERT_EQ(s->m_playQueue.size(), 2u);
 
-    // 播放中收到噪声 final（feino 判定不打断）→ 回复不受任何影响
+    // 播放中收到噪声 final（本地判定不打断：单字反复垃圾文本）→ 回复不受影响
     clock.Advance(2600); // 越过回复启动保护窗
     SendBargeFinal("证证证证证证");
     const auto cs1 = engine.RunOnce();
-    EXPECT_EQ(CountGrpc(cs1, "llm", "judge_interrupt"), 1u);
-    SendVerdict(false, "证证证证证证");
-    const auto cs2 = engine.RunOnce();
+    EXPECT_TRUE(cs1.grpc_calls.empty());               // 不发判定/流水线调用
     EXPECT_EQ(s->m_uttGen, 0u);
     EXPECT_EQ(s->m_playQueue.size(), 2u);
     EXPECT_EQ(s->m_state, SessionState::kThinking);
-    EXPECT_TRUE(cs2.grpc_calls.empty());               // 不发起新流水线
+    bool dropped = false;
+    for (const auto& b : cs1.board_writes)
+        if (b.field == "final_dropped" &&
+            b.value.find("judge:garbage") != std::string::npos)
+            dropped = true;
+    EXPECT_TRUE(dropped);
     EXPECT_EQ(s->m_chatCtx.find("证证"), std::string::npos); // 噪声不入上下文
+
+    // 噪声幻听 4 字碎片（真机"这个这方"类：单字重复占比过半）→ 同样拦截
+    clock.Advance(2600);
+    SendBargeFinal("这个这方");
+    const auto cs2 = engine.RunOnce();
+    EXPECT_TRUE(cs2.grpc_calls.empty());
+    EXPECT_EQ(s->m_uttGen, 0u);
+    EXPECT_EQ(s->m_playQueue.size(), 2u);
 }
 
 // 核心回归（真机 final 后 50ms 噪声秒杀回复）：final 复位连续有声计数
@@ -727,12 +830,12 @@ TEST_F(Fixture, VadFramesDuringPlaybackNeverInterrupt) {
     fin.text = "问题";
     engine.Inject(std::move(fin));
     engine.RunOnce();
-    // A 段文本+音频就绪 → EvolvePlayback 开播（m_replyStartedMs 设置）
-    auto t = Msg(MsgType::kLlmQuickResp, clock.NowMs());
-    t.clip_id = clip::kSoothe; t.text = "嗯"; t.aux = 0;
+    // B 段文本+音频就绪 → EvolvePlayback 开播（m_replyStartedMs 设置）
+    auto t = Msg(MsgType::kLlmRestate, clock.NowMs());
+    t.text = "你问的是问题"; t.aux = 0;
     engine.Inject(std::move(t));
     auto a = Msg(MsgType::kTtsAudioChunk, clock.NowMs());
-    a.clip_id = clip::kSoothe; a.payload = {1, 2, 3}; a.aux = 0;
+    a.clip_id = clip::kRestate; a.payload = {1, 2, 3}; a.aux = 0;
     engine.Inject(std::move(a));
     engine.RunOnce();
     const auto* s = engine.Board().FindSession(kSid);
@@ -772,7 +875,7 @@ TEST_F(Fixture, StaleGenResultsDroppedAfterBargeIn) {
     engine.Inject(std::move(ta));
     const auto cs = engine.RunOnce();
     EXPECT_EQ(CountGrpc(cs, "tts", "synth"), 0u); // 不为旧文本发起 TTS
-    EXPECT_EQ(s->m_playQueue.size(), 2u);         // 旧音频不入队（仅新语句 B/C）
+    EXPECT_EQ(s->m_playQueue.size(), 3u);         // 旧音频不入队（默认承接语 A + 新语句 B/C）
     EXPECT_TRUE(cs.ws_sends.empty());             // 不下发任何音频
 }
 
@@ -782,8 +885,7 @@ TEST_F(Fixture, NewUtteranceAfterBargeInRunsPipeline) {
     fin.text = "问题一";
     engine.Inject(std::move(fin));
     engine.RunOnce();
-    SemanticBarge("问题二"); // 打断 + 新语句
-    const auto cs2 = engine.RunOnce();
+    const auto cs2 = SemanticBarge("第二个问题"); // 打断 + 新语句（≥4 字才过本地判定）
 
     // 打断即开启新语句流水线：复述+答案携带新代际 gen=1
     EXPECT_EQ(CountGrpc(cs2, "llm", "restate"), 1u);
@@ -804,7 +906,7 @@ TEST_F(Fixture, NewUtteranceAfterBargeInRunsPipeline) {
     // 历史包含两轮对话
     const auto* s = engine.Board().FindSession(kSid);
     EXPECT_NE(s->m_chatCtx.find("U:问题一"), std::string::npos);
-    EXPECT_NE(s->m_chatCtx.find("U:问题二"), std::string::npos);
+    EXPECT_NE(s->m_chatCtx.find("U:第二个问题"), std::string::npos);
 }
 
 // 回声抑制：final 与本机最近播报文本相似 → 丢弃（AEC 未校准防自我对话）
@@ -842,13 +944,16 @@ TEST_F(Fixture, EchoFinalDropped) {
     EXPECT_EQ(CountGrpc(cs2, "llm", "judge_interrupt"), 0u);
     EXPECT_EQ(s->m_uttGen, 0u);
 
-    // 真实新语句（与播报无关）→ 正常提交 feino 判定
+    // 真实新语句（与播报无关）→ 本地判定通过，立即打断启动新流水线
     clock.Advance(2600); // 越过回复启动保护窗
     auto real = Msg(MsgType::kAsrFinal, clock.NowMs());
     real.text = "明天会下雨吗";
     engine.Inject(std::move(real));
     const auto cs3 = engine.RunOnce();
-    EXPECT_EQ(CountGrpc(cs3, "llm", "judge_interrupt"), 1u);
+    EXPECT_EQ(CountGrpc(cs3, "llm", "judge_interrupt"), 0u); // 本地判定，无 RPC
+    EXPECT_EQ(s->m_uttGen, 1u);
+    EXPECT_EQ(CountGrpc(cs3, "llm", "restate"), 1u);
+    EXPECT_EQ(CountGrpc(cs3, "llm", "answer"), 1u);
 }
 
 // 回复启动保护窗：同一句话被切成两个 final 时，后到的碎片不得打断
@@ -875,11 +980,13 @@ TEST_F(Fixture, FragmentFinalWithinProtectWindowDropped) {
         if (b.field == "final_dropped") dropped = true;
     EXPECT_TRUE(dropped);
 
-    // 越过保护窗：真实新语句正常提交 feino 判定
+    // 越过保护窗：真实新语句本地判定通过 → 立即打断启动新流水线
     clock.Advance(2000);
     SendBargeFinal("明天会下雨吗");
     const auto cs2 = engine.RunOnce();
-    EXPECT_EQ(CountGrpc(cs2, "llm", "judge_interrupt"), 1u);
+    EXPECT_EQ(CountGrpc(cs2, "llm", "judge_interrupt"), 0u); // 本地判定，无 RPC
+    EXPECT_EQ(s->m_uttGen, 1u);
+    EXPECT_EQ(CountGrpc(cs2, "llm", "answer"), 1u);
 }
 
 TEST_F(Fixture, ClientCancelTriggersBargeIn) {

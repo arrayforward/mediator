@@ -72,6 +72,7 @@ bool IsBareInterjection(const std::vector<uint32_t>& norm) {
         "嗯", "哦", "啊", "呃", "唉", "唔", "哼", "喂",
         "嗯嗯", "哦哦", "啊啊", "呃呃",
         "oah", "ah", "oh", "eh", "hmm", "mhm", "aha", "halo",
+        "hello", "hi", "hey",
     };
     if (norm.empty() || norm.size() > 6) return false;
     for (const char* w : kInterjections)
@@ -99,6 +100,42 @@ bool IsEchoOfSpoken(const std::vector<uint32_t>& norm,
         if (norm.size() >= 6 && BigramJaccard(norm, ns) >= 0.5) return true;
     }
     return false;
+}
+
+// 本地打断判定（原 feino JudgeInterrupt 规则移植，省一次 gRPC 往返）：
+// 噪声幻听碎片（<4 字）/应声词/单字反复垃圾文本/回声均不打断；
+// 真机噪声段 ASR 幻觉（"这个这方"/"没不了"/"hello"类）在此拦截
+bool JudgeInterruptLocal(const std::vector<uint32_t>& norm,
+                         const std::vector<std::string>& spoken,
+                         const char** reason) {
+    if (norm.size() < 4) { *reason = "too_short"; return false; }
+    if (IsBareInterjection(norm)) { *reason = "filler"; return false; }
+    // 垃圾：不同字数 ≤2，或单字重复占比过半（"证证证证"/"这个这方"类）
+    {
+        std::unordered_map<uint32_t, int> freq;
+        int maxFreq = 0;
+        for (const auto cp : norm) maxFreq = std::max(maxFreq, ++freq[cp]);
+        if (freq.size() <= 2) { *reason = "garbage_low_diversity"; return false; }
+        if (maxFreq * 2 >= static_cast<int>(norm.size())) {
+            *reason = "garbage_repetition"; return false;
+        }
+    }
+    if (IsEchoOfSpoken(norm, spoken)) { *reason = "echo"; return false; }
+    return true;
+}
+
+// 默认 A 段承接语料：模糊、通用（只表"我在听"），3-5 秒朗读时长；
+// 无缓存/缓存与上次重复时轮换使用，避免每次完全一样
+const char* PickDefaultSoothe(uint32_t idx) {
+    static const char* kLines[] = {
+        "嗯嗯，我在听呢，你慢慢说。",
+        "我在呢，你接着说，我听着。",
+        "嗯，好的，我在，你继续讲。",
+        "嗯嗯，不着急，慢慢来，我在听。",
+        "好，我听着呢，你继续说。",
+        "嗯，我在呢，慢慢说没关系。",
+    };
+    return kLines[idx % 6];
 }
 
 } // namespace
@@ -178,8 +215,15 @@ void HeartbeatEngine::ProcessOne(const Message& m, ChangeSet& cs) {
             WsOutbound{m.session_id, clip::kNone, true,
                        {m.text.begin(), m.text.end()}});
         break;
+    case MsgType::kAsrPartial: {
+        // ASR 确认门：当前语句有真实语音（非空 partial）才允许触发 quick——
+        // 纯噪声 VAD 段（空识别）不再误触发安抚（真机噪声 long_utt 根因）
+        auto* s = m_board.FindSession(m.session_id);
+        if (s && NormalizeSpeech(m.text).size() >= 2) s->m_uttAsrConfirmed = true;
+        break;
+    }
     default:
-        break; // kAsrPartial/kTick*/kControlAck/kMemoryAck：本轮无心跳内动作
+        break; // kTick*/kControlAck/kMemoryAck：本轮无心跳内动作
     }
 }
 
@@ -246,6 +290,7 @@ void HeartbeatEngine::OnAudioFrame(const Message& m, ChangeSet& cs) {
             s->m_quickRespSubmitted = false; // 新一轮允许再次触发安抚
             s->m_aFallbackDone = false;      // 新一轮允许再次失败兜底
             s->m_degradedSent = false;
+            s->m_uttAsrConfirmed = false;    // 新语句需重新获得 ASR 确认
         }
         s->m_lastVoiceMs = m.ts_ms;
         s->m_state = SessionState::kListening;
@@ -256,21 +301,22 @@ void HeartbeatEngine::OnAudioFrame(const Message& m, ChangeSet& cs) {
 
 void HeartbeatEngine::OnAsrFinal(const Message& m, ChangeSet& cs) {
     auto& s = m_board.GetOrCreateSession(m.session_id);
-    // 回声/碎片过滤（AEC 未校准时的自我对话根因）：正在播放的文本与最近
-    // 播报文本被 ASR 识别回来的 final 一律丢弃——绝不提交 feino/LLM，
-    // 否则自己和自己说个没完
+    // 回声/碎片/空文本过滤：空文本与单字 final 不提交 LLM（噪声段
+    // 占绝大多数）；正在播放的文本与最近播报文本被 ASR 识别回来的
+    // final 一律丢弃——绝不提交 feino/LLM，否则自己和自己说个没完
     const auto norm = NormalizeSpeech(m.text);
+    if (norm.size() >= 2) s.m_uttAsrConfirmed = true; // final 非空：语句确认有真实语音
     std::vector<std::string> spoken(s.m_recentSpoken.begin(), s.m_recentSpoken.end());
     for (const auto& cl : s.m_playQueue)
         if (!cl.text.empty()) spoken.push_back(cl.text);
-    if (IsBareInterjection(norm) || IsEchoOfSpoken(norm, spoken)) {
+    if (norm.size() < 2 || IsBareInterjection(norm) || IsEchoOfSpoken(norm, spoken)) {
         cs.board_writes.push_back(
             BoardMutation{m.session_id, "final_dropped", m.text.substr(0, 64)});
         return;
     }
-    // 播放/思考期间收到的 final 是打断候选：网关不做能量/VAD 帧判断，
-    // 提交 feino 语义判定（JudgeInterrupt），kInterruptVerdict 回来后再决定。
-    // 噪声幻听/回声/应声词由此过滤，不再秒杀回复
+    // 播放/思考期间收到的 final 是打断候选：本地语义判定（原 feino
+    // JudgeInterrupt 规则，挪回 mediator 省 gRPC 往返），噪声幻听/回声/
+    // 应声词在此过滤，不再秒杀回复
     if (s.m_state == SessionState::kThinking || !s.m_playQueue.empty()) {
         // 回复启动保护窗：同一句话被 VAD 切成两段时，后到的碎片 final
         // 不得打断刚启动的回复流水线（真机"今天天气如何"被切成
@@ -282,9 +328,20 @@ void HeartbeatEngine::OnAsrFinal(const Message& m, ChangeSet& cs) {
                               m.text.substr(0, 64)});
             return;
         }
-        cs.grpc_calls.push_back(GrpcCall{"llm", "judge_interrupt", m.session_id,
-                                         clip::kNone, m.text,
-                                         static_cast<int64_t>(s.m_uttGen)});
+        const char* reason = nullptr;
+        if (!JudgeInterruptLocal(norm, spoken, &reason)) {
+            cs.board_writes.push_back(
+                BoardMutation{m.session_id, "final_dropped",
+                              std::string("judge:") + reason + " " +
+                                  m.text.substr(0, 48)});
+            return;
+        }
+        // 判定为真打断：立即执行（与 OnInterruptVerdict 路径等价，无 RPC 延迟）
+        cs.board_writes.push_back(
+            BoardMutation{m.session_id, "barge_src", "asr_final " + m.text.substr(0, 32)});
+        DoBargeIn(s, m.ts_ms, cs);
+        s.m_vadEndpoint = true; // 打断语句已说完，补偿断句标志让 A 段安抚照常触发
+        StartUtterance(s, m.text, m.ts_ms, cs);
         return;
     }
     StartUtterance(s, m.text, m.ts_ms, cs);
@@ -296,6 +353,8 @@ void HeartbeatEngine::OnInterruptVerdict(const Message& m, ChangeSet& cs) {
     if (m.aux == 0) return; // feino 判定不打断（噪声/回声/应声）→ 丢弃该 final
     // 判定到达时回复可能已播完：仅仍在思考/播放才需要打断动作
     if (s->m_state == SessionState::kThinking || !s->m_playQueue.empty()) {
+        cs.board_writes.push_back(
+            BoardMutation{m.session_id, "barge_src", "verdict " + m.text.substr(0, 32)});
         DoBargeIn(*s, m.ts_ms, cs);
         // 打断语句已说完（final 即证据）：补偿被 DoBargeIn 复位的断句标志，
         // 让新语句的 A 段安抚照常触发（与倾听态 final 流程对齐）
@@ -334,7 +393,12 @@ void HeartbeatEngine::OnLlmText(const Message& m, ChangeSet& cs) {
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
     // 打断后迟到的旧代际结果直接丢弃（防止已取消语句复活）
-    if (static_cast<uint64_t>(m.aux) != s->m_uttGen) return;
+    if (static_cast<uint64_t>(m.aux) != s->m_uttGen) {
+        cs.board_writes.push_back(
+            BoardMutation{m.session_id, "llm_stale_drop",
+                          m.text.substr(0, 48)});
+        return;
+    }
     ClipId id = clip::kNone;
     switch (m.type) {
     case MsgType::kLlmQuickResp: id = (m.clip_id == clip::kPlaceholder) ? clip::kPlaceholder : clip::kSoothe; break;
@@ -343,15 +407,14 @@ void HeartbeatEngine::OnLlmText(const Message& m, ChangeSet& cs) {
     default: break;
     }
     if (m.type == MsgType::kLlmQuickResp && id == clip::kSoothe) {
-        // A 文本就绪 → TTS(A)（A clip 可能尚未入队，直接建）
-        if (!FindClip(*s, clip::kSoothe)) {
-            ClipBuffer a; a.id = clip::kSoothe; a.text = m.text; a.text_ready = true;
-            s->m_playQueue.push_front(std::move(a)); // A 插到队首，优先于 B/C
-        } else {
-            auto* a = FindClip(*s, clip::kSoothe);
-            a->text = m.text; a->text_ready = true;
-        }
-        EmitTts(*s, clip::kSoothe, m.text, cs);
+        // A 段播出已由缓存/默认语承担（EvolveQuickResp 零等待路径）——
+        // LLM 结果只刷新缓存：单独合成（kSootheCache，不进播放队列），
+        // 供下一次触发复用，不与 B/C 内容重复
+        s->m_lastSoothe.id = clip::kSoothe;
+        s->m_lastSoothe.text = m.text;
+        s->m_lastSoothe.text_ready = true;
+        s->m_hasLastSoothe = true;
+        EmitTts(*s, clip::kSootheCache, m.text, cs);
     } else if (auto* cl = FindClip(*s, id)) {
         cl->text = m.text;
         cl->text_ready = true;
@@ -423,6 +486,14 @@ void HeartbeatEngine::OnTtsChunk(const Message& m, ChangeSet& cs) {
     if (!s) return;
     // 打断后迟到的旧代际音频直接丢弃（防止已取消语句继续播放）
     if (static_cast<uint64_t>(m.aux) != s->m_uttGen) return;
+    // A 段缓存刷新合成：只沉淀缓存（文本已在 OnLlmText 写入），不进播放队列
+    if (m.clip_id == clip::kSootheCache) {
+        s->m_lastSoothe.g711.assign(m.payload.begin(), m.payload.end());
+        s->m_lastSoothe.audio_ready = true;
+        s->m_hasLastSoothe = true;
+        m_board.MarkChanged(m.session_id);
+        return;
+    }
     auto* cl = FindClip(*s, m.clip_id);
     if (!cl) {
         ClipBuffer nb; nb.id = m.clip_id;
@@ -431,6 +502,11 @@ void HeartbeatEngine::OnTtsChunk(const Message& m, ChangeSet& cs) {
     }
     cl->g711.insert(cl->g711.end(), m.payload.begin(), m.payload.end());
     cl->audio_ready = true;
+    // 默认承接语的合成音同样沉淀进 A 段缓存（LLM quick 失败时的兜底缓存）
+    if (m.clip_id == clip::kSoothe && !s->m_hasLastSoothe) {
+        s->m_lastSoothe = *cl;
+        s->m_hasLastSoothe = true;
+    }
     // 占位音频持久缓存：供下次 A 未就绪时复用（内存 + Redis）
     if (m.clip_id == clip::kPlaceholder) {
         s->m_lastPlaceholder = *cl;
@@ -449,6 +525,7 @@ void HeartbeatEngine::OnTtsChunk(const Message& m, ChangeSet& cs) {
 void HeartbeatEngine::DoBargeIn(SessionContext& s, int64_t now, ChangeSet& cs) {
     s.m_playQueue.clear();
     ++s.m_uttGen;
+    s.m_lastBargeMs = now;
     s.m_placeholderRounds = 0;
     s.m_quickRespSubmitted = false; // 新语句允许再次触发安抚
     s.m_aFallbackDone = false;      // 新语句允许再次失败兜底
@@ -484,6 +561,7 @@ void HeartbeatEngine::OnVadUpdate(const Message& m, ChangeSet& cs) {
             s->m_quickRespSubmitted = false;
             s->m_aFallbackDone = false;
             s->m_degradedSent = false;
+            s->m_uttAsrConfirmed = false;  // 新语句需重新获得 ASR 确认
         }
         s->m_lastVoiceMs = m.ts_ms;
     } else {
@@ -497,9 +575,16 @@ void HeartbeatEngine::OnVadUpdate(const Message& m, ChangeSet& cs) {
 void HeartbeatEngine::OnAudioCancel(const Message& m, ChangeSet& cs) {
     auto* s = m_board.FindSession(m.session_id);
     if (!s) return;
-    // 端侧主动取消（如本地 VAD 打断）：与 barge-in 同语义，空闲时幂等无操作
-    if (s->m_state == SessionState::kThinking || !s->m_playQueue.empty())
+    // 端侧主动取消（如本地 VAD 打断）：与 barge-in 同语义，空闲时幂等无操作。
+    // 去重窗口：端侧收到 interrupted 状态后会回送 cancel（ConvaiBridge 不区分
+    // 打断来源），1.5s 内的重复 cancel 不得再次打断——否则刚提交的新语句
+    // restate/answer 被二次 gen++ 判死（真机"问好吃的无回复"根因）
+    if (m.ts_ms - s->m_lastBargeMs < 1500) return;
+    if (s->m_state == SessionState::kThinking || !s->m_playQueue.empty()) {
+        cs.board_writes.push_back(
+            BoardMutation{m.session_id, "barge_src", "audio_cancel"});
         DoBargeIn(*s, m.ts_ms, cs);
+    }
 }
 
 void HeartbeatEngine::OnWmDetected(const Message& m, ChangeSet& cs) {
@@ -559,10 +644,41 @@ void HeartbeatEngine::EvolveQuickResp(SessionContext& s, int64_t now, ChangeSet&
     const bool long_utt = s.m_uttActive && (now - s.m_uttStartMs) > m_cfg.utt_quick_ms;
     if (!long_utt && !s.m_vadEndpoint) return;
     if (s.m_state == SessionState::kOffline) return;
+    // 噪声门：ASR 未确认当前语句有真实语音（partial/final 非空）→ 纯噪声
+    // VAD 段不提交 quick（真机噪声段 5s long_utt 误触发安抚的根因）
+    if (!s.m_uttAsrConfirmed) return;
+    // 回复已开播或已有就绪文本（B/C/A）：安抚语再到只会与复述/答案重复
+    // （真机 quick 比 answer 还晚到、内容与复述撞车的根因）
+    if (s.m_replyStartedMs > 0) return;
+    for (const auto& cl : s.m_playQueue)
+        if (cl.text_ready) return;
     s.m_quickRespSubmitted = true;
+    // 立即播出，不等 LLM：有缓存音且与上次播出不同 → 0 等待复用；
+    // 否则默认模糊承接语轮换（仅 TTS 延迟）。LLM quick 照常提交，
+    // 结果只刷新缓存（kSootheCache 合成），供下一次使用
+    if (s.m_hasLastSoothe && s.m_lastSoothe.audio_ready &&
+        s.m_lastSoothe.text != s.m_prevSootheText) {
+        ClipBuffer a = s.m_lastSoothe;
+        a.id = clip::kSoothe;
+        a.sent_bytes = 0;
+        s.m_prevSootheText = a.text;
+        s.m_playQueue.push_front(std::move(a));
+    } else {
+        const char* line = PickDefaultSoothe(s.m_sootheIdx);
+        if (s.m_prevSootheText == line) line = PickDefaultSoothe(s.m_sootheIdx + 1);
+        ++s.m_sootheIdx;
+        ClipBuffer a;
+        a.id = clip::kSoothe;
+        a.text = line;
+        a.text_ready = true;
+        s.m_prevSootheText = line;
+        s.m_playQueue.push_front(std::move(a));
+        EmitTts(s, clip::kSoothe, line, cs);
+    }
     cs.grpc_calls.push_back(
         GrpcCall{"llm", "quick", s.m_sessionId, clip::kSoothe, s.m_chatCtx,
                  static_cast<int64_t>(s.m_uttGen)});
+    m_board.MarkChanged(s.m_sessionId);
 }
 
 void HeartbeatEngine::EvolvePlayback(SessionContext& s, int64_t now, ChangeSet& cs) {
@@ -594,7 +710,7 @@ void HeartbeatEngine::EvolvePlayback(SessionContext& s, int64_t now, ChangeSet& 
     auto& front = s.m_playQueue.front();
     const int64_t budget = (front.id == clip::kRestate)   ? m_cfg.b_timeout_ms
                            : (front.id == clip::kAnswer) ? m_cfg.c_timeout_ms
-                                                    : 0;
+                                                     : 0;
     if (budget <= 0 || front.requested_ms <= 0) return;
     if (now - front.requested_ms <= budget) return;
 
